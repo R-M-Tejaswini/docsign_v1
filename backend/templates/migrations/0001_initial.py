@@ -25,13 +25,27 @@ class Migration(migrations.Migration):
                         verbose_name="ID",
                     ),
                 ),
-                ("name", models.CharField(max_length=255)),
+                ("title", models.CharField(max_length=255)),  # Changed from "name"
+                ("description", models.TextField(blank=True)),  # Added
                 (
                     "file",
                     models.FileField(upload_to=templates.models.template_upload_path),
                 ),
-                ("page_count", models.PositiveIntegerField(default=1)),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "page_count",
+                    models.PositiveIntegerField(
+                        default=1,
+                        validators=[django.core.validators.MinValueValidator(1)],
+                    ),
+                ),
+                (
+                    "created_at",
+                    models.DateTimeField(auto_now_add=True),
+                ),
+                (
+                    "updated_at",  # Added
+                    models.DateTimeField(auto_now=True),
+                ),
             ],
             options={
                 "ordering": ["-created_at"],

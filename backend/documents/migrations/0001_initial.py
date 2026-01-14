@@ -58,7 +58,7 @@ class Migration(migrations.Migration):
                 ),
                 (
                     "file",
-                    models.FileField(upload_to=documents.models.document_upload_path),
+                    models.FileField(upload_to=documents.models.document_version_upload_path),
                 ),
                 ("version_number", models.PositiveIntegerField(default=1)),
                 (

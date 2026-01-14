@@ -8,28 +8,26 @@ from django.core.exceptions import ValidationError
 from PyPDF2 import PdfReader
 
 
-def document_upload_path(instance, filename):
-    """Generate upload path for document version PDFs."""
+def document_version_upload_path(instance, filename):
+    """
+    Generate upload path for document version files.
+    Uses document ID and version number for organization.
+    """
+    # If copying from template, preserve original filename
+    # Otherwise use the uploaded filename
     ext = os.path.splitext(filename)[1]
-    doc_id = instance.document.id if instance.document else 'temp'
-    version = instance.version_number
-    return f'documents/{doc_id}/v{version}_{filename}'
+    return f'documents/{instance.document_id}/v{instance.version_number}/{filename}'
 
 
 class Document(models.Model):
     """
-    Document is a container for one or more versions.
-    Can be created from a template or uploaded directly.
+    Document represents a signing workflow instance.
+    Can be created from a template or uploaded PDF.
     """
     title = models.CharField(max_length=255)
-    created_from_template = models.ForeignKey(
-        'templates.Template',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='documents'
-    )
+    description = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         ordering = ['-created_at']
@@ -40,65 +38,121 @@ class Document(models.Model):
 
 class DocumentVersion(models.Model):
     """
-    DocumentVersion represents a specific version of a document.
-    Each version has its own PDF file and field instances.
-    Status tracks the signing progress.
+    A version of a document representing a snapshot at a point in time.
     """
-    STATUS_CHOICES = [
-        ('draft', 'Draft'),
-        ('locked', 'Locked'),
-        ('partially_signed', 'Partially Signed'),
-        ('completed', 'Completed'),
-    ]
-    
     document = models.ForeignKey(
         Document,
         on_delete=models.CASCADE,
         related_name='versions'
     )
-    file = models.FileField(upload_to=document_upload_path)
     version_number = models.PositiveIntegerField(default=1)
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
-    page_count = models.PositiveIntegerField(default=1)
+    file = models.FileField(upload_to=document_version_upload_path)
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('draft', 'Draft'),
+            ('locked', 'Locked for signing'),
+            ('completed', 'Fully signed'),
+        ],
+        default='draft'
+    )
+    page_count = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         ordering = ['-version_number']
-        unique_together = ['document', 'version_number']
-    
-    def __str__(self):
-        return f"{self.document.title} v{self.version_number}"
     
     def save(self, *args, **kwargs):
         """Compute page count and auto-increment version number."""
-        is_new = self.pk is None
-        
-        # Auto-increment version number if not set
-        if is_new and not self.version_number:
-            last_version = self.document.versions.order_by('-version_number').first()
+        # Auto-set version_number only if it's not already set
+        if not self.version_number or self.version_number == 1:
+            last_version = DocumentVersion.objects.filter(
+                document=self.document
+            ).order_by('-version_number').first()
             self.version_number = (last_version.version_number + 1) if last_version else 1
         
-        super().save(*args, **kwargs)
-        
-        # Compute page count for new uploads
-        if is_new and self.file:
+        # Extract page count from PDF if file exists
+        if self.file:
             try:
-                with self.file.open('rb') as f:
-                    pdf = PdfReader(f)
-                    self.page_count = len(pdf.pages)
-                    DocumentVersion.objects.filter(pk=self.pk).update(page_count=self.page_count)
-            except Exception:
-                DocumentVersion.objects.filter(pk=self.pk).update(page_count=1)
+                reader = PdfReader(self.file)
+                self.page_count = len(reader.pages)
+            except Exception as e:
+                print(f"Error reading PDF: {e}")
+                self.page_count = 1
+        
+        super().save(*args, **kwargs)
     
-    def can_generate_link(self, scope='sign'):
-        """Check if version can generate signing links."""
-        if scope == 'view':
-            # View-only links can be generated for any non-draft document
-            return self.status != 'draft'
-        else:
-            # Sign links can only be generated for locked or partially signed documents
-            # Completed documents cannot have new sign links (all fields are filled)
-            return self.status in ['locked', 'partially_signed']
+    def get_recipients(self):
+        """Get list of unique recipients assigned to fields."""
+        recipients = self.fields.values_list('recipient', flat=True).distinct()
+        return sorted([r for r in recipients if r])
+    
+    def get_recipient_status(self):
+        """
+        Get signing status per recipient.
+        Returns dict: {recipient: {'total': int, 'signed': int, 'completed': bool}}
+        """
+        recipients = self.get_recipients()
+        status = {}
+        
+        for recipient in recipients:
+            recipient_fields = self.fields.filter(recipient=recipient)
+            required_fields = recipient_fields.filter(required=True)
+            
+            total = required_fields.count()
+            signed = required_fields.filter(locked=True).exclude(
+                value__isnull=True
+            ).exclude(value='').count()
+            
+            status[recipient] = {
+                'total': total,
+                'signed': signed,
+                'completed': (signed == total) if total > 0 else True
+            }
+        
+        return status
+    
+    def can_generate_sign_link(self, recipient):
+        """
+        Check if a sign link can be generated for a specific recipient.
+        Rules:
+        - Document must be locked (not draft)
+        - Recipient must have fields assigned
+        - Recipient must not have already signed (all their required fields)
+        - No active sign token for this recipient
+        """
+        if self.status == 'draft':
+            return False, "Document must be locked before generating sign links"
+        
+        # Check if recipient has fields
+        recipient_fields = self.fields.filter(recipient=recipient)
+        if not recipient_fields.exists():
+            return False, f"No fields assigned to {recipient}"
+        
+        # Check if recipient already completed signing
+        recipient_status = self.get_recipient_status()
+        if recipient in recipient_status and recipient_status[recipient]['completed']:
+            return False, f"{recipient} has already completed signing"
+        
+        # Check if active sign token exists for this recipient
+        active_token = self.tokens.filter(
+            recipient=recipient,
+            scope='sign',
+            revoked=False
+        ).filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=timezone.now())
+        ).first()
+        
+        if active_token and not active_token.used:
+            return False, f"Active sign link already exists for {recipient}"
+        
+        return True, None
+    
+    def can_generate_view_link(self):
+        """View links can be generated for any non-draft document."""
+        if self.status == 'draft':
+            return False, "Document must be locked before generating view links"
+        return True, None
     
     def compute_sha256(self):
         """Compute SHA256 hash of the PDF file."""
@@ -110,39 +164,30 @@ class DocumentVersion(models.Model):
     
     def update_status(self):
         """
-        Recompute status based on field completion.
-        Called after signing events or locking.
-        For multi-use links: status becomes partially_signed until all required fields are filled.
+        Update document status based on recipient completion.
+        - draft: stays draft until manually locked
+        - locked: just locked, no signatures yet
+        - partially_signed: some recipients signed, others haven't
+        - completed: all recipients completed their required fields
         """
         if self.status == 'draft':
             return  # Draft stays draft until manually locked
         
-        # Get all required fields
-        required_fields = self.fields.filter(required=True)
+        recipient_status = self.get_recipient_status()
         
-        if not required_fields.exists():
-            # No required fields means it's completed once locked
-            if self.status in ['locked', 'partially_signed']:
-                self.status = 'completed'
+        if not recipient_status:
+            # No recipients/fields - mark as completed
+            self.status = 'completed'
         else:
-            # Count filled and locked fields
-            filled_fields = required_fields.filter(
-                locked=True
-            ).exclude(value__isnull=True).exclude(value='')
+            all_completed = all(rs['completed'] for rs in recipient_status.values())
+            any_signed = any(rs['signed'] > 0 for rs in recipient_status.values())
             
-            total_required = required_fields.count()
-            filled_count = filled_fields.count()
-            
-            if filled_count == 0:
-                # No fields filled yet
-                if self.status not in ['draft']:
-                    self.status = 'locked'
-            elif filled_count < total_required:
-                # Some fields filled - THIS IS KEY FOR MULTI-USE
+            if all_completed:
+                self.status = 'completed'
+            elif any_signed:
                 self.status = 'partially_signed'
             else:
-                # All required fields filled
-                self.status = 'completed'
+                self.status = 'locked'
         
         self.save(update_fields=['status'])
 
@@ -150,7 +195,7 @@ class DocumentVersion(models.Model):
 class DocumentField(models.Model):
     """
     DocumentField is a field instance on a specific document version.
-    Copied from TemplateField or created manually.
+    Each field is assigned to a recipient who must fill it.
     """
     FIELD_TYPES = [
         ('text', 'Text'),
@@ -166,6 +211,11 @@ class DocumentField(models.Model):
     )
     field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
     label = models.CharField(max_length=255)
+    recipient = models.CharField(
+        max_length=100,
+        default='Recipient 1',  # ← Add this
+        help_text="Recipient identifier who must fill this field"
+    )
     
     # Page and position
     page_number = models.PositiveIntegerField(validators=[MinValueValidator(1)])
@@ -176,19 +226,28 @@ class DocumentField(models.Model):
     
     required = models.BooleanField(default=True)
     value = models.TextField(blank=True, null=True)
-    locked = models.BooleanField(default=False, help_text="Field is locked after signing")
+    locked = models.BooleanField(
+        default=False,
+        help_text="Field is locked after signing and cannot be edited"
+    )
     
     class Meta:
         ordering = ['page_number', 'y_pct', 'x_pct']
     
     def __str__(self):
-        return f"{self.version} - {self.label}"
+        return f"{self.label} ({self.recipient}) - {self.version}"
+    
+    def clean(self):
+        """Validate recipient is assigned."""
+        if not self.recipient or not self.recipient.strip():
+            raise ValidationError({'recipient': 'Each field must be assigned to a recipient'})
 
 
 class SigningToken(models.Model):
     """
-    SigningToken controls access to view or sign a document version.
-    Tokens must be unguessable and can be single-use or multi-use.
+    SigningToken controls access to sign or view a document version.
+    Sign tokens are ALWAYS single-use and tied to a specific recipient.
+    View tokens are unlimited-use and have no recipient.
     """
     SCOPE_CHOICES = [
         ('view', 'View Only'),
@@ -202,7 +261,13 @@ class SigningToken(models.Model):
         related_name='tokens'
     )
     scope = models.CharField(max_length=10, choices=SCOPE_CHOICES)
-    single_use = models.BooleanField(default=True)
+    recipient = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        default=None,  # ← View tokens have no recipient
+        help_text="Recipient identifier for sign tokens (null for view tokens)"
+    )
     used = models.BooleanField(default=False)
     revoked = models.BooleanField(default=False)
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -210,23 +275,39 @@ class SigningToken(models.Model):
     
     class Meta:
         ordering = ['-created_at']
+        # Ensure only one active sign token per recipient
+        constraints = [
+            models.UniqueConstraint(
+                fields=['version', 'recipient', 'scope'],
+                condition=models.Q(scope='sign', revoked=False, used=False),
+                name='unique_active_sign_token_per_recipient'
+            )
+        ]
     
     def __str__(self):
-        return f"Token {self.token[:8]}... ({self.scope})"
+        recipient_info = f" for {self.recipient}" if self.recipient else ""
+        return f"Token {self.token[:8]}... ({self.scope}{recipient_info})"
+    
+    def clean(self):
+        """Validate sign tokens have recipients, view tokens don't require them."""
+        if self.scope == 'sign' and not self.recipient:
+            raise ValidationError({'recipient': 'Sign tokens must specify a recipient'})
     
     @classmethod
-    def generate_token(cls, version, scope='sign', single_use=True, expires_in_days=None):
+    def generate_token(cls, version, scope='sign', recipient=None, expires_in_days=None):
         """Generate a new signing token."""
-        # Validate version status
-        if not version.can_generate_link(scope=scope):
-            if scope == 'sign':
-                raise ValidationError(
-                    'Sign links can only be generated for locked or partially signed documents'
-                )
-            else:
-                raise ValidationError(
-                'Links can only be generated for non-draft documents'
-            )
+        if scope == 'sign':
+            if not recipient:
+                raise ValidationError('Sign tokens must specify a recipient')
+            
+            can_generate, error = version.can_generate_sign_link(recipient)
+            if not can_generate:
+                raise ValidationError(error)
+        else:
+            # View token
+            can_generate, error = version.can_generate_view_link()
+            if not can_generate:
+                raise ValidationError(error)
         
         token_str = secrets.token_urlsafe(32)
         expires_at = None
@@ -237,33 +318,25 @@ class SigningToken(models.Model):
             token=token_str,
             version=version,
             scope=scope,
-            single_use=single_use,
+            recipient=recipient,
             expires_at=expires_at
         )
     
     def is_valid(self):
         """Check if token is valid for use."""
         if self.revoked:
-            return False, "Token has been revoked"
+            return False, "This link has been revoked"
         
-        # Check expiry only if expires_at is set
         if self.expires_at and timezone.now() > self.expires_at:
-            return False, "Token has expired"
+            return False, "This link has expired"
         
-        # Single-use tokens are converted to view-only after signing
-        # They remain valid for viewing
-        if self.single_use and self.used and self.scope == 'sign':
-            return False, "Token has already been used for signing"
+        if self.scope == 'sign' and self.used:
+            return False, "This signing link has already been used"
         
         return True, None
     
-    def mark_used(self):
-        """Mark token as used and potentially convert scope to view."""
-        self.used = True
-        self.save(update_fields=['used'])
-    
     def convert_to_view_only(self):
-        """Convert a sign token to view-only after all required fields are filled."""
+        """Convert a sign token to view-only after signing."""
         if self.scope == 'sign':
             self.scope = 'view'
             self.used = True
@@ -272,7 +345,7 @@ class SigningToken(models.Model):
 
 class SignatureEvent(models.Model):
     """
-    SignatureEvent records each signing action.
+    SignatureEvent records each signing action by a recipient.
     Stores metadata for audit trail and verification.
     """
     version = models.ForeignKey(
@@ -286,6 +359,11 @@ class SignatureEvent(models.Model):
         null=True,
         related_name='signature_events'
     )
+    recipient = models.CharField(
+        max_length=100,
+        default='Recipient 1',  # ← Add this
+        help_text="Recipient identifier who signed"
+    )
     signer_name = models.CharField(max_length=255)
     signed_at = models.DateTimeField(auto_now_add=True)
     
@@ -294,7 +372,7 @@ class SignatureEvent(models.Model):
     user_agent = models.TextField(blank=True)
     document_sha256 = models.CharField(max_length=64, help_text="SHA256 hash of PDF at sign time")
     
-    # Field values at time of signing (JSON)
+    # Field values at time of signing
     field_values = models.JSONField(
         help_text="Array of {field_id, value} objects signed in this event"
     )
@@ -308,4 +386,4 @@ class SignatureEvent(models.Model):
         ordering = ['-signed_at']
     
     def __str__(self):
-        return f"{self.signer_name} signed {self.version} at {self.signed_at}"
+        return f"{self.signer_name} ({self.recipient}) signed {self.version} on {self.signed_at}"

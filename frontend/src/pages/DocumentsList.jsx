@@ -184,7 +184,7 @@ export const DocumentsList = () => {
                 <option value="">-- Choose a template --</option>
                 {templates.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.name}
+                    {t.title} {/* Changed from "t.name" to "t.title" */}
                   </option>
                 ))}
               </select>

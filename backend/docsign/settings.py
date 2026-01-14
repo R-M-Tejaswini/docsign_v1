@@ -41,6 +41,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 # Base URL for building full paths
 BASE_URL = 'http://localhost:8000'
+FRONTEND_BASE_URL = 'http://localhost:5173'
 
 # Application definition
 

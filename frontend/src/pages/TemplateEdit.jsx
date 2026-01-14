@@ -19,17 +19,12 @@ export const TemplateEdit = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
   const [toasts, setToasts] = useState([])
+  const [allRecipients, setAllRecipients] = useState(['Recipient 1']) // Start with default
 
   const { execute: getTemplate } = useApi(() => templateAPI.get(id))
-  const { execute: createField } = useApi((data) =>
-    templateAPI.createField(id, data)
-  )
-  const { execute: updateField } = useApi((fid, data) =>
-    templateAPI.updateField(id, fid, data)
-  )
-  const { execute: deleteField } = useApi((fid) =>
-    templateAPI.deleteField(id, fid)
-  )
+  const { execute: createField } = useApi((data) => templateAPI.createField(id, data))
+  const { execute: updateField } = useApi((fid, data) => templateAPI.updateField(id, fid, data))
+  const { execute: deleteField } = useApi((fid) => templateAPI.deleteField(id, fid))
 
   const addToast = (message, type = 'info') => {
     const id = Date.now()
@@ -48,6 +43,12 @@ export const TemplateEdit = () => {
       const data = await getTemplate()
       setTemplate(data)
       setFields(data.fields || [])
+      
+      // Extract all unique recipients from fields
+      const recipients = [...new Set(data.fields?.map(f => f.recipient).filter(Boolean))]
+      if (recipients.length > 0) {
+        setAllRecipients(recipients.sort())
+      }
     } catch (err) {
       addToast('Failed to load template', 'error')
     }
@@ -63,19 +64,20 @@ export const TemplateEdit = () => {
 
     e.stopPropagation()
     
-    // Get the PDF container position (the scaled element inside DocumentViewer)
     const pdfContainer = e.currentTarget
     const rect = pdfContainer.getBoundingClientRect()
     
-    // Calculate position relative to unscaled PDF dimensions
-    // The click coordinates need to account for the PDF scale
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
+
+    // Determine default recipient
+    const defaultRecipient = allRecipients[0] || 'Recipient 1'
 
     try {
       const newField = await createField({
         field_type: addingFieldType,
         label: `${addingFieldType.charAt(0).toUpperCase() + addingFieldType.slice(1)} ${fields.length + 1}`,
+        recipient: defaultRecipient,
         page_number: currentPage,
         x_pct: Math.max(0, Math.min(1, x)),
         y_pct: Math.max(0, Math.min(1, y)),
@@ -94,12 +96,22 @@ export const TemplateEdit = () => {
 
   const handleUpdateField = async (updatedField) => {
     try {
-      // Only send the fields that can be updated
       await updateField(updatedField.id, {
         label: updatedField.label,
         required: updatedField.required,
+        recipient: updatedField.recipient,
+        x_pct: updatedField.x_pct,
+        y_pct: updatedField.y_pct,
+        width_pct: updatedField.width_pct,
+        height_pct: updatedField.height_pct,
       })
       setFields(fields.map((f) => (f.id === updatedField.id ? updatedField : f)))
+      
+      // Update recipients list if new recipient added
+      if (updatedField.recipient && !allRecipients.includes(updatedField.recipient)) {
+        setAllRecipients([...allRecipients, updatedField.recipient].sort())
+      }
+      
       addToast('Field updated', 'success')
     } catch (err) {
       addToast('Failed to update field', 'error')
@@ -108,10 +120,17 @@ export const TemplateEdit = () => {
 
   const handleDeleteField = async (fieldId) => {
     if (!window.confirm('Delete this field?')) return
+    
     try {
       await deleteField(fieldId)
-      setFields(fields.filter((f) => f.id !== fieldId))
+      const updatedFields = fields.filter((f) => f.id !== fieldId)
+      setFields(updatedFields)
       setSelectedFieldId(null)
+      
+      // Update recipients list
+      const recipients = [...new Set(updatedFields.map(f => f.recipient).filter(Boolean))]
+      setAllRecipients(recipients.sort())
+      
       addToast('Field deleted', 'success')
     } catch (err) {
       addToast('Failed to delete field', 'error')
@@ -123,7 +142,14 @@ export const TemplateEdit = () => {
   }
 
   const fileUrl = template.file_url || template.file
+
+  // Build absolute URL
+let absoluteFileUrl = fileUrl
+if (fileUrl && !fileUrl.startsWith('http')) {
+  absoluteFileUrl = `http://localhost:8000${fileUrl}`
+}
   const pageFields = fields.filter((f) => f.page_number === currentPage)
+  const selectedField = fields.find(f => f.id === selectedFieldId)
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -132,11 +158,26 @@ export const TemplateEdit = () => {
       <div className="flex-1 flex flex-col">
         <div className="bg-white border-b px-6 py-4 flex justify-between items-center">
           <div>
-            <h1 className="text-2xl font-bold">{template.name}</h1>
+            <h1 className="text-2xl font-bold">{template.title}</h1>
             {addingFieldType && (
               <p className="text-sm text-blue-600 mt-1">
                 Click on the PDF to add a {addingFieldType} field
               </p>
+            )}
+            
+            {/* Recipient badges */}
+            {allRecipients.length > 0 && (
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-xs text-gray-500">Recipients:</span>
+                {allRecipients.map(recipient => {
+                  const recipientFields = fields.filter(f => f.recipient === recipient)
+                  return (
+                    <span key={recipient} className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded">
+                      {recipient} ({recipientFields.length})
+                    </span>
+                  )
+                })}
+              </div>
             )}
           </div>
           <Button onClick={() => navigate('/templates')} variant="secondary">
@@ -151,7 +192,7 @@ export const TemplateEdit = () => {
             style={{ cursor: addingFieldType ? 'crosshair' : 'default' }}
           >
             <DocumentViewer
-              fileUrl={fileUrl}
+              fileUrl={absoluteFileUrl}
               currentPage={currentPage}
               onPageChange={setCurrentPage}
             >
@@ -170,11 +211,11 @@ export const TemplateEdit = () => {
                       field={field}
                       pageWidth={612}
                       pageHeight={792}
-                      scale={scale}
-                      isSelected={selectedFieldId === field.id}
-                      isEditing={true}
                       onUpdate={handleUpdateField}
                       onSelect={setSelectedFieldId}
+                      isSelected={selectedFieldId === field.id}
+                      isEditing={true}
+                      scale={scale}
                     />
                   ))}
                 </PageLayer>
@@ -182,14 +223,44 @@ export const TemplateEdit = () => {
             </DocumentViewer>
           </div>
 
-          {selectedFieldId && (
+          <div className="w-80 bg-white border-l p-4 overflow-y-auto">
             <FieldEditor
-              field={fields.find((f) => f.id === selectedFieldId)}
+              field={selectedField}
               onUpdate={handleUpdateField}
-              onDelete={handleDeleteField}
-              onClose={() => setSelectedFieldId(null)}
+              onDelete={() => handleDeleteField(selectedFieldId)}
+              allRecipients={allRecipients}
+              canEdit={true}
             />
-          )}
+
+            {/* Recipient Summary */}
+            {allRecipients.length > 0 && (
+              <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+                <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                  Recipients Summary
+                </h4>
+                <div className="space-y-2">
+                  {allRecipients.map(recipient => {
+                    const recipientFields = fields.filter(f => f.recipient === recipient)
+                    const requiredCount = recipientFields.filter(f => f.required).length
+                    
+                    return (
+                      <div key={recipient} className="text-xs">
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">{recipient}</span>
+                          <span className="text-gray-500">
+                            {recipientFields.length} fields
+                          </span>
+                        </div>
+                        <div className="text-gray-500 mt-1">
+                          {requiredCount} required
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
