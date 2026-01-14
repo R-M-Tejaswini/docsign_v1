@@ -1,11 +1,12 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.conf import settings
+from templates.models import TemplateField
 from .models import (
     Document, DocumentVersion, DocumentField,
     SigningToken, SignatureEvent
 )
-from templates.models import TemplateField
+
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
