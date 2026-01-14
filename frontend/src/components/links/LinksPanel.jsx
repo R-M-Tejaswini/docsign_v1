@@ -4,6 +4,7 @@ import { useApi } from '../../hooks/useApi'
 import { useClipboard } from '../../hooks/useClipboard'
 import { tokenAPI } from '../../services/api'
 import { GenerateLinkModal } from './GenerateLinkModal'
+import { getRecipientBadgeClasses } from '../../utils/recipientColors'
 
 export const LinksPanel = ({ document, version }) => {
   const [tokens, setTokens] = useState([])
@@ -25,66 +26,51 @@ export const LinksPanel = ({ document, version }) => {
     try {
       const data = await listTokens()
       // Filter tokens for this specific version
-      const versionSpecificTokens = data.filter((t) => t.version_id === version?.id)
-      setTokens(versionSpecificTokens)
+      const versionTokens = data.filter(t => t.version_id === version.id)
+      setTokens(versionTokens)
     } catch (err) {
       console.error('Failed to load tokens:', err)
     }
   }
 
-  const handleRevoke = async (token) => {
+  const handleRevoke = async (tokenStr) => {
+    if (!window.confirm('Revoke this link? It will no longer be accessible.')) {
+      return
+    }
+
     try {
-      await revokeToken(token)
-      setTokens(tokens.map((t) => (t.token === token ? { ...t, revoked: true } : t)))
+      await revokeToken(tokenStr)
+      await loadTokens()
     } catch (err) {
-      console.error('Failed to revoke token:', err)
+      alert('Failed to revoke token')
     }
   }
 
-  const handleLinkGenerated = async () => {
-    await loadTokens()
-    setShowModal(false)
+  const handleGenerateSuccess = () => {
+    loadTokens()
   }
 
-  // Check if links can be generated
-  const canGenerateLink = version && ['locked', 'partially_signed', 'completed'].includes(version.status)
-
-  const getStatusBadgeColor = (status) => {
-    switch (status) {
-      case 'completed':
-        return 'bg-green-100 text-green-800'
-      case 'partially_signed':
-        return 'bg-yellow-100 text-yellow-800'
-      case 'locked':
-        return 'bg-blue-100 text-blue-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
-
-  const getTokenStatusIcon = (token) => {
-    if (token.revoked) return '🚫'
-    if (token.used && token.single_use) return '✓'
-    return token.scope === 'sign' ? '✍️' : '👁️'
-  }
+  const canGenerateLink = version.status !== 'draft'
 
   const getTokenStatusText = (token) => {
     if (token.revoked) return 'Revoked'
-    if (token.used && token.single_use) return 'Used'
-    return 'Active'
+    if (token.scope === 'sign') {
+      if (token.used) return 'Signed'
+      return `Sign (${token.recipient})`
+    }
+    return 'View'
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Generate Link Section */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold">Generate Signing Links</h3>
-        </div>
+  // Get all recipients from version
+  const allRecipients = version.recipients || []
 
-        <Button 
-          onClick={() => setShowModal(true)} 
-          variant="primary" 
+  return (
+    <div className="p-6 space-y-6">
+      {/* Generate Link Button */}
+      <div>
+        <Button
+          onClick={() => setShowModal(true)}
+          variant="primary"
           size="sm"
           disabled={!canGenerateLink}
           className="w-full"
@@ -116,39 +102,66 @@ export const LinksPanel = ({ document, version }) => {
                 {/* Token Header */}
                 <div
                   onClick={() =>
-                    setExpandedTokenId(
-                      expandedTokenId === token.id ? null : token.id
-                    )
+                    setExpandedTokenId(expandedTokenId === token.id ? null : token.id)
                   }
-                  className="p-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors flex items-center justify-between"
+                  className="p-3 bg-gray-50 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
                 >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <span className="text-lg">
-                      {getTokenStatusIcon(token)}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">
-                        {token.scope === 'sign' ? 'Sign Link' : 'View Only'}
-                        {' • '}
-                        {token.single_use ? 'Single-use' : 'Multi-use'}
-                      </div>
-                      <div className="text-xs text-gray-500 truncate">
-                        {token.token.slice(0, 16)}...
-                      </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span
+                        className={`text-xs px-2 py-1 rounded font-medium ${
+                          token.revoked
+                            ? 'bg-red-100 text-red-800'
+                            : token.scope === 'sign' && token.used
+                            ? 'bg-green-100 text-green-800'
+                            : token.scope === 'sign'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        {getTokenStatusText(token)}
+                      </span>
+                      
+                      {/* Show recipient badge for sign tokens */}
+                      {token.recipient && (
+                        <span className={getRecipientBadgeClasses(token.recipient, allRecipients)}>
+                          {token.recipient}
+                        </span>
+                      )}
                     </div>
+                    <div className="text-xs text-gray-500">
+                      Created: {new Date(token.created_at).toLocaleDateString()}
+                    </div>
+                    {token.expires_at && (
+                      <div className="text-xs text-gray-500">
+                        Expires: {new Date(token.expires_at).toLocaleDateString()}
+                      </div>
+                    )}
+                    {/* Show recipient status for sign tokens */}
+                    {token.recipient_status && (
+                      <div className="text-xs mt-1">
+                        <span className={`${
+                          token.recipient_status.completed 
+                            ? 'text-green-600' 
+                            : 'text-yellow-600'
+                        }`}>
+                          {token.recipient_status.signed}/{token.recipient_status.total} fields
+                          {token.recipient_status.completed && ' ✓'}
+                        </span>
+                      </div>
+                    )}
                   </div>
-
                   <div className="flex items-center gap-2">
                     <span
                       className={`text-xs px-2 py-1 rounded ${
                         token.revoked
                           ? 'bg-red-100 text-red-800'
-                          : token.used && token.single_use
+                          : token.used
                           ? 'bg-green-100 text-green-800'
                           : 'bg-blue-100 text-blue-800'
                       }`}
                     >
-                      {getTokenStatusText(token)}
+                      {token.revoked ? 'Revoked' : token.used ? 'Used' : 'Active'}
                     </span>
                     <span className="text-gray-400">
                       {expandedTokenId === token.id ? '▼' : '▶'}
@@ -175,66 +188,35 @@ export const LinksPanel = ({ document, version }) => {
                           onClick={() => copy(token.public_url)}
                           variant="secondary"
                           size="sm"
-                          disabled={token.revoked}
                         >
-                          {copied ? '✓' : 'Copy'}
+                          {copied ? 'Copied!' : 'Copy'}
                         </Button>
                       </div>
                     </div>
 
-                    {/* Token Metadata */}
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <label className="font-semibold text-gray-600">
-                          Created
-                        </label>
-                        <p className="text-gray-700">
-                          {new Date(token.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      {token.expires_at && (
-                        <div>
-                          <label className="font-semibold text-gray-600">
-                            Expires
-                          </label>
-                          <p className="text-gray-700">
-                            {new Date(token.expires_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Signatures Section */}
+                    {/* Signature Events */}
                     {token.signatures && token.signatures.length > 0 && (
-                      <div className="border-t pt-3">
-                        <label className="text-xs font-semibold text-gray-600 uppercase mb-2 block">
-                          Signatures ({token.signatures.length})
+                      <div>
+                        <label className="text-xs font-semibold text-gray-600 uppercase">
+                          Signature Events ({token.signatures.length})
                         </label>
-                        <div className="space-y-2 max-h-40 overflow-y-auto">
+                        <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
                           {token.signatures.map((sig, idx) => (
-                            <div
-                              key={sig.id}
-                              className="bg-gray-50 p-2 rounded text-xs"
-                            >
-                              <div className="font-medium text-gray-800">
-                                {idx + 1}. {sig.signer_name_display}
+                            <div key={idx} className="text-xs p-2 bg-gray-50 rounded border">
+                              <div className="flex items-center justify-between mb-1">
+                                {sig.recipient && (
+                                  <span className={getRecipientBadgeClasses(sig.recipient, allRecipients)}>
+                                    {sig.recipient}
+                                  </span>
+                                )}
+                                <span className="text-green-600">✓ Signed</span>
+                              </div>
+                              <div className="font-medium text-gray-900">
+                                {sig.signer_name_display}
                               </div>
                               <div className="text-gray-500 mt-1">
-                                Signed:{' '}
                                 {new Date(sig.signed_at).toLocaleString()}
                               </div>
-                              {sig.field_values && sig.field_values.length > 0 && (
-                                <div className="text-gray-600 mt-1">
-                                  Fields filled: {sig.field_values.length}
-                                  <div className="mt-1 ml-2 space-y-1">
-                                    {sig.field_values.map((fv, fidx) => (
-                                      <div key={fidx} className="text-gray-500">
-                                        • Field {fv.field_id}: {fv.value}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
                               {sig.ip_address && (
                                 <div className="text-gray-400 text-[10px] mt-1">
                                   IP: {sig.ip_address}
@@ -277,7 +259,7 @@ export const LinksPanel = ({ document, version }) => {
         onClose={() => setShowModal(false)}
         document={document}
         version={version}
-        onSuccess={handleLinkGenerated}
+        onSuccess={handleGenerateSuccess}
       />
     </div>
   )

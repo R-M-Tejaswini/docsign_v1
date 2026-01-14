@@ -1,73 +1,68 @@
-from django.urls import path, include
-from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import (
-    DocumentViewSet, DocumentVersionViewSet,
-    DocumentFieldViewSet, SigningTokenViewSet,
+    DocumentViewSet,
+    SigningTokenViewSet,
     PublicSignViewSet
 )
-
-router = DefaultRouter()
-router.register(r'documents', DocumentViewSet, basename='document')
 
 app_name = 'documents'
 
 urlpatterns = [
-    path('', include(router.urls)),
+    # Document CRUD
+    path('', DocumentViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='document-list'),
     
-    # Nested document versions
-    path(
-        'documents/<int:document_pk>/versions/',
-        DocumentVersionViewSet.as_view({'get': 'list'}),
-        name='document-versions-list'
-    ),
-    path(
-        'documents/<int:document_pk>/versions/<int:pk>/',
-        DocumentVersionViewSet.as_view({'get': 'retrieve'}),
-        name='document-version-detail'
-    ),
-    path(
-        'documents/<int:document_pk>/versions/<int:pk>/lock/',
-        DocumentVersionViewSet.as_view({'post': 'lock'}),
-        name='document-version-lock'
-    ),
+    path('<int:pk>/', DocumentViewSet.as_view({
+        'get': 'retrieve',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='document-detail'),
     
-    # Nested document fields
-    path(
-        'documents/<int:document_pk>/versions/<int:version_pk>/fields/',
-        DocumentFieldViewSet.as_view({'get': 'list'}),
-        name='document-fields-list'
-    ),
-    path(
-        'documents/<int:document_pk>/versions/<int:version_pk>/fields/<int:pk>/',
-        DocumentFieldViewSet.as_view({
-            'get': 'retrieve',
-            'put': 'update',
-            'patch': 'partial_update'
-        }),
-        name='document-field-detail'
-    ),
+    # Document versions
+    path('<int:pk>/versions/', DocumentViewSet.as_view({
+        'get': 'versions'
+    }), name='document-versions'),
+    
+    path('<int:pk>/versions/<int:version_id>/', DocumentViewSet.as_view({
+        'get': 'version_detail'
+    }), name='document-version-detail'),
+    
+    path('<int:pk>/versions/<int:version_id>/lock/', DocumentViewSet.as_view({
+        'post': 'lock_version'
+    }), name='document-version-lock'),
+    
+    path('<int:pk>/versions/<int:version_id>/recipients/', DocumentViewSet.as_view({
+        'get': 'available_recipients'
+    }), name='document-available-recipients'),
+    
+    # Document fields
+    path('<int:pk>/versions/<int:version_id>/fields/', DocumentViewSet.as_view({
+        'post': 'create_field'
+    }), name='document-field-create'),
+    
+    path('<int:pk>/versions/<int:version_id>/fields/<int:field_id>/', DocumentViewSet.as_view({
+        'patch': 'update_field',
+        'delete': 'delete_field'
+    }), name='document-field-detail'),
     
     # Signing tokens
-    path(
-        'documents/<int:document_pk>/versions/<int:version_pk>/links/',
-        SigningTokenViewSet.as_view({'post': 'create_token'}),
-        name='create-token'
-    ),
-    path(
-        'documents/<int:document_pk>/links/',
-        SigningTokenViewSet.as_view({'get': 'list_tokens'}),
-        name='list-tokens'
-    ),
-    path(
-        'links/revoke/',
-        SigningTokenViewSet.as_view({'post': 'revoke_token'}),
-        name='revoke-token'
-    ),
+    path('<int:document_id>/links/', SigningTokenViewSet.as_view({
+        'get': 'list'
+    }), name='token-list'),
     
-    # Public signing (no auth)
-    path(
-        'public/sign/<str:token>/',
-        PublicSignViewSet.as_view({'get': 'get_sign_page', 'post': 'submit_signature'}),
-        name='public-sign'
-    ),
+    path('<int:document_id>/versions/<int:version_id>/links/', SigningTokenViewSet.as_view({
+        'post': 'create'
+    }), name='token-create'),
+    
+    path('links/revoke/', SigningTokenViewSet.as_view({
+        'post': 'revoke'
+    }), name='token-revoke'),
+    
+    # Public signing endpoints (no auth)
+    path('public/sign/<str:token>/', PublicSignViewSet.as_view({
+        'get': 'get_sign_page',
+        'post': 'submit_signature'
+    }), name='public-sign'),
 ]

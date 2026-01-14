@@ -4,81 +4,75 @@ from .models import Template, TemplateField
 
 
 class TemplateFieldSerializer(serializers.ModelSerializer):
-    """Serializer for TemplateField."""
+    """Serializer for TemplateField with recipient."""
     
     class Meta:
         model = TemplateField
         fields = [
-            'id', 'field_type', 'label', 'page_number',
+            'id', 'field_type', 'label', 'recipient', 'page_number',
             'x_pct', 'y_pct', 'width_pct', 'height_pct', 'required'
         ]
+        read_only_fields = ['id']
+    
+    def validate_recipient(self, value):
+        """Ensure recipient is not empty."""
+        if not value or not value.strip():
+            raise serializers.ValidationError('Recipient must be specified')
+        return value.strip()
+
+
+class TemplateSerializer(serializers.ModelSerializer):
+    """Serializer for Template with fields and recipients."""
+    fields = TemplateFieldSerializer(many=True, read_only=True)
+    file_url = serializers.SerializerMethodField()
+    recipients = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Template
+        fields = [
+            'id', 'title', 'description', 'file', 'file_url',
+            'page_count', 'created_at', 'updated_at',
+            'fields', 'recipients'
+        ]
+        read_only_fields = ['id', 'page_count', 'created_at', 'updated_at']
+    
+    def get_file_url(self, obj):
+        """Generate file URL."""
+        if obj.file:
+            # Return just the relative path
+            return obj.file.url  # This returns /media/templates/3/file.pdf
+        return None
+    
+    def get_recipients(self, obj):
+        """Get list of unique recipients."""
+        return obj.get_recipients()
 
 
 class TemplateListSerializer(serializers.ModelSerializer):
     """Serializer for Template list view."""
+    field_count = serializers.SerializerMethodField()
+    recipient_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Template
-        fields = ['id', 'name', 'page_count', 'created_at']
-
-
-class TemplateDetailSerializer(serializers.ModelSerializer):
-    """Serializer for Template detail view with nested fields."""
-    fields = TemplateFieldSerializer(many=True, read_only=True)
-    file_url = serializers.SerializerMethodField()
+        fields = [
+            'id', 'title', 'description', 'page_count',
+            'field_count', 'recipient_count', 'created_at'
+        ]
+        read_only_fields = fields
     
-    class Meta:
-        model = Template
-        fields = ['id', 'name', 'page_count', 'created_at', 'fields', 'file_url']
+    def get_field_count(self, obj):
+        """Get number of fields."""
+        return obj.fields.count()
     
-    def get_file_url(self, obj):
-        """Get the full URL for the PDF file."""
-        request = self.context.get('request')
-        if obj.file:
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            else:
-                return f"{settings.BASE_URL}{obj.file.url}"
-        return None
+    def get_recipient_count(self, obj):
+        """Get number of unique recipients."""
+        return len(obj.get_recipients())
 
 
 class TemplateCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating a new template."""
+    """Serializer for creating a template."""
     
     class Meta:
         model = Template
-        fields = ['name', 'file']
-    
-    def create(self, validated_data):
-        """Create template and compute page count."""
-        return Template.objects.create(**validated_data)
-
-
-class TemplateFieldCreateSerializer(serializers.ModelSerializer):
-    """Serializer for creating/updating template fields."""
-    
-    class Meta:
-        model = TemplateField
-        fields = [
-            'field_type', 'label', 'page_number',
-            'x_pct', 'y_pct', 'width_pct', 'height_pct', 'required'
-        ]
-    
-    def validate_page_number(self, value):
-        """Validate page number is within template page count."""
-        template = self.context.get('template')
-        if template and value > template.page_count:
-            raise serializers.ValidationError(
-                f'Page number must be between 1 and {template.page_count}'
-            )
-        return value
-    
-    def validate(self, data):
-        """Validate coordinate bounds."""
-        coords = ['x_pct', 'y_pct', 'width_pct', 'height_pct']
-        for coord in coords:
-            if data.get(coord, 0) < 0 or data.get(coord, 1) > 1:
-                raise serializers.ValidationError(
-                    f'{coord} must be between 0.0 and 1.0'
-                )
-        return data
+        fields = ['title', 'description', 'file']

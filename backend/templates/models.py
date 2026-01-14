@@ -1,53 +1,69 @@
 import os
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
-from PyPDF2 import PdfReader
+from django.core.exceptions import ValidationError
 
 
 def template_upload_path(instance, filename):
-    """Generate upload path for template PDFs."""
-    ext = os.path.splitext(filename)[1]
-    return f'templates/{instance.id or "temp"}_{filename}'
+    """
+    Generate upload path for template files.
+    Uses the template ID instead of a title field.
+    """
+    # Use template ID and preserve original filename
+    return f'templates/{instance.id}/{filename}'
 
 
 class Template(models.Model):
     """
-    Template represents a reusable PDF with predefined field locations.
-    Templates are the source for creating documents.
+    A template is a PDF with predefined fields that can be reused.
     """
-    name = models.CharField(max_length=255)
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
     file = models.FileField(upload_to=template_upload_path)
-    page_count = models.PositiveIntegerField(default=1)
+    page_count = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)]
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
         ordering = ['-created_at']
     
     def __str__(self):
-        return self.name
+        return self.title
+    
+    def get_recipients(self):
+        """Get list of unique recipients for this template."""
+        return list(
+            self.fields
+            .values_list('recipient', flat=True)
+            .distinct()
+            .filter(recipient__isnull=False)
+        )
     
     def save(self, *args, **kwargs):
-        """Override save to compute page count on upload."""
-        is_new = self.pk is None
-        super().save(*args, **kwargs)
-        
-        # If new file uploaded, compute page count
-        if is_new and self.file:
+        # Extract page count from PDF if not set
+        if self.page_count == 1 and self.file:
             try:
-                with self.file.open('rb') as f:
-                    pdf = PdfReader(f)
-                    self.page_count = len(pdf.pages)
-                    # Update without triggering save loop
-                    Template.objects.filter(pk=self.pk).update(page_count=self.page_count)
+                from PyPDF2 import PdfReader
+                pdf = PdfReader(self.file)
+                self.page_count = len(pdf.pages)
             except Exception as e:
-                # Fallback to 1 if PDF reading fails
-                Template.objects.filter(pk=self.pk).update(page_count=1)
+                print(f"Error reading PDF: {e}")
+                self.page_count = 1
+        super().save(*args, **kwargs)
+    
+    def clean(self):
+        """Validate recipient is assigned."""
+        if not self.recipient or not self.recipient.strip():
+            raise ValidationError({'recipient': 'Each field must be assigned to a recipient'})
 
 
 class TemplateField(models.Model):
     """
     TemplateField defines a field location on a template PDF.
-    Coordinates are stored as percentages (0.0 to 1.0) relative to page dimensions.
+    Each field is assigned to a recipient.
     """
     FIELD_TYPES = [
         ('text', 'Text'),
@@ -63,6 +79,11 @@ class TemplateField(models.Model):
     )
     field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
     label = models.CharField(max_length=255)
+    recipient = models.CharField(
+        max_length=100,
+        default='Recipient 1',  # ← Add this
+        help_text="Recipient identifier (e.g., 'Recipient 1', 'Recipient 2')"
+    )
     
     # Page number (1-indexed)
     page_number = models.PositiveIntegerField(validators=[MinValueValidator(1)])
@@ -91,12 +112,4 @@ class TemplateField(models.Model):
         ordering = ['page_number', 'y_pct', 'x_pct']
     
     def __str__(self):
-        return f"{self.template.name} - {self.label} ({self.field_type})"
-    
-    def clean(self):
-        """Validate page number is within template page count."""
-        from django.core.exceptions import ValidationError
-        if self.page_number > self.template.page_count:
-            raise ValidationError(
-                f'Page number {self.page_number} exceeds template page count {self.template.page_count}'
-            )
+        return f"{self.label} ({self.recipient}) - Page {self.page_number}"

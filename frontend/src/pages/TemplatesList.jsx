@@ -32,23 +32,23 @@ export const TemplatesList = () => {
 
   const handleUpload = async (e) => {
     e.preventDefault()
-    if (!uploadFile || !templateName.trim()) {
-      addToast('Please provide both name and file', 'warning')
+    if (!templateName.trim() || !uploadFile) {
+      addToast('Please fill all fields', 'warning')
       return
     }
 
     try {
-      await createTemplate({
-        name: templateName,
+      const result = await createTemplate({
+        title: templateName, // Changed from "name" to "title"
         file: uploadFile,
       })
-      addToast('Template uploaded successfully', 'success')
+      addToast('Template created successfully', 'success')
       setTemplateName('')
       setUploadFile(null)
       setShowUploadModal(false)
       await loadTemplates()
     } catch (err) {
-      addToast(err.message || 'Failed to upload template', 'error')
+      addToast(err.message || 'Failed to create template', 'error')
     }
   }
 
