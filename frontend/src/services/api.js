@@ -105,6 +105,22 @@ export const documentAPI = {
     api.get(`/documents/${docId}/versions/${versionId}/audit_export/`, {
       responseType: 'blob'
     }),
+  
+  webhooks: {
+    list: () => api.get('/documents/webhooks/'),
+    
+    create: (data) => api.post('/documents/webhooks/', data),
+    
+    delete: (id) => api.delete(`/documents/webhooks/${id}/`),
+    
+    test: (id) => api.post(`/documents/webhooks/${id}/test/`),
+    
+    listEvents: (webhookId) => 
+      api.get(`/documents/webhooks/${webhookId}/events/`),
+    
+    getEventLogs: (eventId) => 
+      api.get(`/documents/webhook-events/${eventId}/logs/`),
+  },
 }
 
 // Signing token endpoints

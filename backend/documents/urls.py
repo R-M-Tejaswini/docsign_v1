@@ -3,7 +3,9 @@ from .views import (
     DocumentViewSet,
     SigningTokenViewSet,
     PublicSignViewSet,
-    SignatureVerificationViewSet
+    SignatureVerificationViewSet,
+    WebhookViewSet,
+    WebhookEventViewSet
 )
 
 app_name = 'documents'
@@ -99,3 +101,20 @@ urlpatterns = [
          SignatureVerificationViewSet.as_view({'get': 'audit_export'}),
          name='audit-export'),
 ]
+
+# Webhook URLs
+webhook_urls = [
+    # Webhooks
+    path('webhooks/', WebhookViewSet.as_view({'get': 'list', 'post': 'create'}), name='webhook-list'),
+    path('webhooks/<int:pk>/', WebhookViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='webhook-detail'),
+    path('webhooks/<int:pk>/events/', WebhookViewSet.as_view({'get': 'events'}), name='webhook-events'),
+    path('webhooks/<int:pk>/test/', WebhookViewSet.as_view({'post': 'test'}), name='webhook-test'),
+    path('webhooks/<int:pk>/retry/', WebhookViewSet.as_view({'post': 'retry'}), name='webhook-retry'),
+    
+    # Webhook Events
+    path('webhook-events/', WebhookEventViewSet.as_view({'get': 'list'}), name='webhook-event-list'),
+    path('webhook-events/<int:pk>/', WebhookEventViewSet.as_view({'get': 'retrieve'}), name='webhook-event-detail'),
+    path('webhook-events/<int:pk>/logs/', WebhookEventViewSet.as_view({'get': 'logs'}), name='webhook-event-logs'),
+]
+
+urlpatterns += webhook_urls

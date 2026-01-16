@@ -474,3 +474,160 @@ def compute_signature_event_hash(sender, instance, created, **kwargs):
     if created and not instance.event_hash:
         instance.event_hash = instance.compute_event_hash()
         instance.save(update_fields=['event_hash'])
+
+
+class Webhook(models.Model):
+    """
+    Webhook registration for external systems to listen to events.
+    """
+    EVENTS = [
+        ('document.signature_created', 'Signature Created'),
+        ('document.completed', 'Document Completed'),
+        ('document.locked', 'Document Locked'),
+        ('document.status_changed', 'Status Changed'),
+    ]
+
+    url = models.URLField(
+        help_text="External endpoint URL to receive webhook events"
+    )
+    # ✅ RENAMED from 'events' to 'subscribed_events'
+    subscribed_events = models.JSONField(
+        default=list,
+        help_text="List of events to subscribe to (e.g., ['document.completed'])"
+    )
+    secret = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="Secret key for webhook signature verification (HMAC-SHA256)"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this webhook is enabled"
+    )
+    
+    # Metadata
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    
+    # Stats
+    total_deliveries = models.PositiveIntegerField(default=0)
+    successful_deliveries = models.PositiveIntegerField(default=0)
+    failed_deliveries = models.PositiveIntegerField(default=0)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['is_active', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"Webhook: {self.url}"
+    
+    def generate_signature(self, payload: dict) -> str:
+        """
+        Generate HMAC-SHA256 signature for webhook payload.
+        External systems can verify the signature to ensure authenticity.
+        """
+        import json
+        import hmac
+        payload_str = json.dumps(payload, sort_keys=True)
+        signature = hmac.new(
+            self.secret.encode(),
+            payload_str.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        return signature
+    
+    def increment_delivery_attempt(self, success: bool):
+        """Track delivery statistics."""
+        self.total_deliveries += 1
+        if success:
+            self.successful_deliveries += 1
+        else:
+            self.failed_deliveries += 1
+        self.last_triggered_at = timezone.now()
+        self.save(update_fields=[
+            'total_deliveries',
+            'successful_deliveries',
+            'failed_deliveries',
+            'last_triggered_at'
+        ])
+
+
+class WebhookEvent(models.Model):
+    """
+    Record of each webhook event fired (for audit trail and debugging).
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('delivered', 'Delivered'),
+        ('failed', 'Failed'),
+        ('retrying', 'Retrying'),
+    ]
+    
+    webhook = models.ForeignKey(
+        Webhook,
+        on_delete=models.CASCADE,
+        related_name='webhook_events'  # ✅ Explicit related_name to avoid clash
+    )
+    event_type = models.CharField(
+        max_length=50,
+        choices=Webhook.EVENTS,
+        help_text="Type of event (e.g., 'document.completed')"
+    )
+    payload = models.JSONField(
+        help_text="Event data sent to webhook"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    attempt_count = models.PositiveIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['webhook', 'status', 'created_at']),
+            models.Index(fields=['event_type', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.event_type} - {self.status}"
+
+
+class WebhookDeliveryLog(models.Model):
+    """
+    Detailed log of each delivery attempt (for debugging).
+    """
+    event = models.ForeignKey(
+        WebhookEvent,
+        on_delete=models.CASCADE,
+        related_name='delivery_logs'
+    )
+    status_code = models.PositiveIntegerField(null=True, blank=True)
+    response_body = models.TextField(blank=True)
+    error_message = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    duration_ms = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="How long the HTTP request took in milliseconds"
+    )
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['event', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return f"Delivery Log - {self.event} (HTTP {self.status_code})"

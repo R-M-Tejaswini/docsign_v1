@@ -179,3 +179,9 @@ FRONTEND_BASE_URL = config("FRONTEND_BASE_URL", default="http://localhost:5173")
 # File upload settings
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# ✅ ADD: Celery Configuration (Synchronous for development)
+CELERY_BROKER_URL = 'redis://localhost:6379'  # Or your broker URL
+CELERY_RESULT_BACKEND = 'redis://localhost:6379'
+CELERY_TASK_ALWAYS_EAGER = True  # ← Execute tasks synchronously (development)
+CELERY_TASK_EAGER_PROPAGATES = True
