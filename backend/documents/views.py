@@ -7,6 +7,16 @@ from rest_framework.permissions import AllowAny
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
+from rest_framework.pagination import PageNumberPagination
+from django.http import HttpResponse
+from io import BytesIO
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+import io
+import traceback
+import os
+
 
 from .models import (
     Document, DocumentVersion, DocumentField,
@@ -21,11 +31,18 @@ from .serializers import (
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer
 )
+from .services import get_pdf_flattening_service
+
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
 
 
 class DocumentViewSet(viewsets.ModelViewSet):
     """ViewSet for Document CRUD operations."""
     queryset = Document.objects.all()
+    pagination_class = StandardResultsSetPagination
     
     def get_parsers(self):
         """Override parsers based on request method."""
@@ -54,64 +71,35 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         with transaction.atomic():
-            document = serializer.save()
+            document = serializer.save()  # ← This should create ONE version via the serializer
             
-            if 'template_id' in request.data:
-                template_id = request.data['template_id']
-                try:
-                    from templates.models import Template
-                    template = Template.objects.get(id=template_id)
-                    
-                    # Create version - don't set version_number, let save() handle it
-                    version = DocumentVersion.objects.create(
-                        document=document,
-                        # Remove: version_number=1,  ← DELETE THIS LINE
-                        file=template.file,
-                        status='draft',
-                        page_count=template.page_count
-                    )
-                    
-                    # Copy template fields
-                    for template_field in template.fields.all():
-                        DocumentField.objects.create(
-                            version=version,
-                            field_type=template_field.field_type,
-                            label=template_field.label,
-                            recipient=template_field.recipient,
-                            page_number=template_field.page_number,
-                            x_pct=template_field.x_pct,
-                            y_pct=template_field.y_pct,
-                            width_pct=template_field.width_pct,
-                            height_pct=template_field.height_pct,
-                            required=template_field.required,
-                        )
-                
-                except Template.DoesNotExist:
-                    return Response(
-                        {'error': 'Template not found'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-            elif 'file' in request.FILES:
-                # Remove: version_number=1,  ← DELETE THIS LINE
-                version = DocumentVersion.objects.create(
-                    document=document,
-                    file=request.FILES['file'],
-                    status='draft'
-                )
-            else:
-                return Response(
-                    {'error': 'Either template_id or file is required'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Don't create another version here!
+            # The serializer's create() method handles it
     
         output_serializer = DocumentDetailSerializer(document, context={'request': request})
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['get'])
     def versions(self, request, pk=None):
-        """List all versions of a document."""
+        """List all versions of a specific document."""
         document = self.get_object()
         versions = document.versions.all()
+        serializer = DocumentVersionSerializer(
+            versions, many=True, context={'request': request}
+        )
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def all_versions(self, request):
+        """List all versions across all documents."""
+        versions = DocumentVersion.objects.select_related('document').order_by('-created_at')
+        page = self.paginate_queryset(versions)
+        if page is not None:
+            serializer = DocumentVersionSerializer(
+                page, many=True, context={'request': request}
+            )
+            return self.get_paginated_response(serializer.data)
+        
         serializer = DocumentVersionSerializer(
             versions, many=True, context={'request': request}
         )
@@ -173,9 +161,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
         recipient_status = version.get_recipient_status()
         recipients = version.get_recipients()
         
-        # Build response with recipient availability
+        # Build response with recipient availability - DEDUPLICATED
         available = []
+        seen_recipients = set()
+        
         for recipient in recipients:
+            if recipient in seen_recipients:
+                continue
+            
+            seen_recipients.add(recipient)
             status_info = recipient_status.get(recipient, {})
             
             # Check if recipient can receive a sign link
@@ -252,6 +246,91 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         field.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/copy')
+    def copy_version(self, request, pk=None, version_id=None):
+        """Create a new draft version by copying an existing version."""
+        document = self.get_object()
+        version = get_object_or_404(document.versions, id=version_id)
+        
+        # Create new version (version_number will auto-increment via save())
+        new_version = DocumentVersion.objects.create(
+            document=document,
+            file=version.file,
+            status='draft',
+            page_count=version.page_count
+        )
+        
+        # Copy all fields from the original version
+        for field in version.fields.all():
+            DocumentField.objects.create(
+                version=new_version,
+                field_type=field.field_type,
+                label=field.label,
+                recipient=field.recipient,
+                page_number=field.page_number,
+                x_pct=field.x_pct,
+                y_pct=field.y_pct,
+                width_pct=field.width_pct,
+                height_pct=field.height_pct,
+                required=field.required
+            )
+        
+        serializer = DocumentVersionSerializer(new_version, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/download')
+    def download_version(self, request, pk=None, version_id=None):
+        """Download version PDF with flattened signatures."""
+        document = self.get_object()
+        version = get_object_or_404(document.versions, id=version_id)
+        
+        # Only allow download if completed
+        if version.status != 'completed':
+            return Response(
+                {'error': 'Document must be completed before downloading'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Check if signed_file exists
+            if version.signed_file:
+                file_path = version.signed_file.path
+                if os.path.exists(file_path):
+                    with open(file_path, 'rb') as pdf_file:
+                        response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                        response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
+                        return response
+        
+            # If no signed_file or it doesn't exist, generate it
+            service = get_pdf_flattening_service()
+            service.flatten_and_save(version)
+            
+            # Verify the file was created
+            if not version.signed_file or not os.path.exists(version.signed_file.path):
+                return Response(
+                    {'error': 'Failed to generate signed PDF'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Stream the newly created file
+            with open(version.signed_file.path, 'rb') as pdf_file:
+                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
+                return response
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to generate PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def flatten_signatures_on_pdf(self, pdf_path, version):
+        """DEPRECATED: Use PDFFlatteningService instead."""
+        service = get_pdf_flattening_service()
+        return service.flatten_version(version)
 
 
 class SigningTokenViewSet(viewsets.ViewSet):
@@ -448,7 +527,6 @@ class PublicSignViewSet(viewsets.ViewSet):
             required=True,
             locked=False
         )
-        
         filled_field_ids = set(field_ids)
         missing_required = required_recipient_fields.exclude(id__in=filled_field_ids)
         
@@ -500,7 +578,7 @@ class PublicSignViewSet(viewsets.ViewSet):
             # Update version status based on completion
             version.update_status()
         
-        response_serializer = PublicSignResponseSerializer({
+            response_serializer = PublicSignResponseSerializer({
             'signature_id': signature_event.id,
             'message': 'Document signed successfully',
             'version_status': version.status,
@@ -519,3 +597,56 @@ class PublicSignViewSet(viewsets.ViewSet):
         else:
             ip = request.META.get('REMOTE_ADDR')
         return ip
+
+    def get_recipients(self, obj):
+        """Get list of unique recipients from the model method."""
+        return obj.get_recipients()  # This should already be deduped in the model
+    
+    def flatten_signatures_on_pdf(self, pdf_path, version):
+        """DEPRECATED: Use PDFFlatteningService instead."""
+        service = get_pdf_flattening_service()
+        return service.flatten_version(version)
+    
+    @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
+    def download_public(self, request, token=None):
+        """Download signed PDF from public link."""
+        try:
+            signing_token = SigningToken.objects.select_related('version').get(token=token)
+        except SigningToken.DoesNotExist:
+            return Response({'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
+        
+        version = signing_token.version
+        
+        # Only allow download if completed
+        if version.status != 'completed':
+            return Response(
+                {'error': 'Document is not yet complete'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Generate or retrieve signed PDF
+            if not version.signed_file:
+                service = get_pdf_flattening_service()
+                service.flatten_and_save(version)
+            
+            # Verify file exists
+            if not version.signed_file or not os.path.exists(version.signed_file.path):
+                return Response(
+                    {'error': 'PDF file not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Stream the file
+            with open(version.signed_file.path, 'rb') as pdf_file:
+                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="{version.document.title}_signed.pdf"'
+                return response
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to generate PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

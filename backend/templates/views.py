@@ -49,6 +49,21 @@ class TemplateViewSet(viewsets.ModelViewSet):
         serializer = TemplateSerializer(instance, context={'request': request})
         return Response(serializer.data)
     
+    def partial_update(self, request, *args, **kwargs):
+        """Update template fields (title, description)."""
+        instance = self.get_object()
+        # Use TemplateListSerializer for validation/save
+        serializer = TemplateListSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        # Refresh instance from DB to get updated data
+        instance.refresh_from_db()
+        
+        # Return full TemplateSerializer with all nested data
+        output_serializer = TemplateSerializer(instance, context={'request': request})
+        return Response(output_serializer.data)
+    
     @action(detail=True, methods=['get'])
     def recipients(self, request, pk=None):
         """Get list of unique recipients in this template."""
@@ -83,3 +98,13 @@ class TemplateViewSet(viewsets.ModelViewSet):
         # DELETE
         field.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    def create(self, request, *args, **kwargs):
+        """Create a new template."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        
+        # Return full template data with ID
+        output_serializer = TemplateSerializer(instance, context={'request': request})
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)

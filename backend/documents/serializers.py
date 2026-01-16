@@ -53,56 +53,74 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
 
 
 class DocumentVersionSerializer(serializers.ModelSerializer):
-    """Serializer for DocumentVersion with fields and recipient status."""
-    fields = DocumentFieldSerializer(many=True, read_only=True)
+    """Serializer for DocumentVersion."""
+    document_id = serializers.SerializerMethodField()
+    document_title = serializers.SerializerMethodField()
+    document_description = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
+    signed_file_url = serializers.SerializerMethodField()
     recipients = serializers.SerializerMethodField()
     recipient_status = serializers.SerializerMethodField()
+    fields = DocumentFieldSerializer(many=True, read_only=True)  # ← Make sure this is here
     
     class Meta:
         model = DocumentVersion
         fields = [
-            'id', 'version_number', 'status', 'page_count',
-            'file', 'file_url', 'created_at', 'fields',
-            'recipients', 'recipient_status'
+            'id', 'version_number', 'status', 'page_count', 'created_at',
+            'file', 'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
+            'document_id', 'document_title', 'document_description'
         ]
-        read_only_fields = ['id', 'version_number', 'page_count', 'created_at']
+    
+    def get_document_id(self, obj):
+        return obj.document.id
+    
+    def get_document_title(self, obj):
+        return obj.document.title
+    
+    def get_document_description(self, obj):
+        return obj.document.description
     
     def get_file_url(self, obj):
-        """Generate file URL."""
+        """Return the correct file URL."""
         if obj.file:
-            # Return just the relative path - frontend will prepend the API base URL
-            return obj.file.url  # This returns /media/documents/1/v1/file.pdf
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+    
+    def get_signed_file_url(self, obj):
+        """Return signed file URL if available."""
+        if obj.signed_file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.signed_file.url)
+            return obj.signed_file.url
         return None
     
     def get_recipients(self, obj):
-        """Get list of unique recipients."""
-        return obj.get_recipients()
+        """Get list of unique recipients from the model method."""
+        return obj.get_recipients()  # Already deduped by model
     
     def get_recipient_status(self, obj):
-        """Get signing status per recipient."""
+        """Get recipient status from the model method."""
         return obj.get_recipient_status()
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):
     """Serializer for Document detail with latest version."""
-    latest_version = DocumentVersionSerializer(read_only=True)
+    latest_version = serializers.SerializerMethodField()
     
     class Meta:
         model = Document
         fields = ['id', 'title', 'description', 'created_at', 'updated_at', 'latest_version']
-        read_only_fields = ['id', 'created_at', 'updated_at']
     
-    def to_representation(self, instance):
-        """Include latest version."""
-        data = super().to_representation(instance)
-        latest = instance.versions.order_by('-version_number').first()
+    def get_latest_version(self, obj):
+        """Get the latest version with all fields."""
+        latest = obj.versions.order_by('-version_number').first()
         if latest:
-            data['latest_version'] = DocumentVersionSerializer(
-                latest,
-                context=self.context
-            ).data
-        return data
+            return DocumentVersionSerializer(latest, context={'request': self.context.get('request')}).data
+        return None
 
 
 class DocumentListSerializer(serializers.ModelSerializer):
@@ -113,7 +131,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = ['id', 'title', 'description', 'status', 'version_count', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'created_at']  # ← Make sure 'title' is NOT here
     
     def get_status(self, obj):
         """Get status of latest version."""
@@ -150,42 +168,16 @@ class DocumentCreateSerializer(serializers.Serializer):
         # Create document
         document = Document.objects.create(**validated_data)
         
-        # Create initial version
-        if file and template_id:
-            # Both file and template provided - use file but copy template fields
-            template = Template.objects.get(id=template_id)
-            version = DocumentVersion.objects.create(
-                document=document,
-                file=file,
-                version_number=1,
-                status='draft'
-            )
-            
-            # Copy template fields with recipients
-            for tfield in template.fields.all():
-                DocumentField.objects.create(
-                    version=version,
-                    field_type=tfield.field_type,
-                    label=tfield.label,
-                    recipient=tfield.recipient,
-                    page_number=tfield.page_number,
-                    x_pct=tfield.x_pct,
-                    y_pct=tfield.y_pct,
-                    width_pct=tfield.width_pct,
-                    height_pct=tfield.height_pct,
-                    required=tfield.required
-                )
-        elif template_id:
-            # Only template provided - use its file
+        # Create ONLY ONE initial version
+        if template_id:
             template = Template.objects.get(id=template_id)
             version = DocumentVersion.objects.create(
                 document=document,
                 file=template.file,
-                version_number=1,
                 status='draft'
             )
             
-            # Copy template fields with recipients
+            # Copy template fields
             for tfield in template.fields.all():
                 DocumentField.objects.create(
                     version=version,
@@ -200,14 +192,12 @@ class DocumentCreateSerializer(serializers.Serializer):
                     required=tfield.required
                 )
         elif file:
-            # Only file provided - create empty version
             version = DocumentVersion.objects.create(
                 document=document,
                 file=file,
-                version_number=1,
                 status='draft'
             )
-        
+    
         return document
 
 

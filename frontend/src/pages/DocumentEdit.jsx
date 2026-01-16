@@ -14,7 +14,9 @@ import { documentAPI } from '../services/api'
 export const DocumentEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [document, setDocument] = useState(null)
+  const [documentData, setDocumentData] = useState(null) // ← renamed from 'document'
+  const [documentTitle, setDocumentTitle] = useState('')
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [version, setVersion] = useState(null)
   const [fields, setFields] = useState([])
   const [selectedFieldId, setSelectedFieldId] = useState(null)
@@ -23,8 +25,10 @@ export const DocumentEdit = () => {
   const [toasts, setToasts] = useState([])
   const [activeTab, setActiveTab] = useState('fields') // 'fields' or 'links'
   const [allRecipients, setAllRecipients] = useState(['Recipient 1']) // Start with default
+  const [downloadingVersion, setDownloadingVersion] = useState(false)
 
   const { execute: getDocument } = useApi(() => documentAPI.get(id))
+  const { execute: updateDocument } = useApi((data) => documentAPI.update(id, data))
   const { execute: lockVersion } = useApi(() => 
     documentAPI.lockVersion(id, version?.id)
   )
@@ -36,6 +40,9 @@ export const DocumentEdit = () => {
   )
   const { execute: deleteField } = useApi((fieldId) =>
     documentAPI.deleteField(id, version?.id, fieldId)
+  )
+  const { execute: downloadVersion } = useApi(() =>
+    documentAPI.downloadVersion(id, version?.id)
   )
 
   const addToast = (message, type = 'info') => {
@@ -53,7 +60,8 @@ export const DocumentEdit = () => {
   const loadDocument = async () => {
     try {
       const data = await getDocument()
-      setDocument(data)
+      setDocumentData(data) // ← updated
+      setDocumentTitle(data.title)
       const latestVersion = data.latest_version
       setVersion(latestVersion)
       setFields(latestVersion?.fields || [])
@@ -65,6 +73,23 @@ export const DocumentEdit = () => {
       }
     } catch (err) {
       addToast('Failed to load document', 'error')
+    }
+  }
+
+  const handleSaveTitle = async () => {
+    if (!documentTitle.trim()) {
+      addToast('Document name cannot be empty', 'error')
+      return
+    }
+
+    try {
+      await updateDocument({ title: documentTitle })
+      setDocumentData({ ...documentData, title: documentTitle }) // ← updated
+      setIsEditingTitle(false)
+      addToast('Document name updated', 'success')
+    } catch (err) {
+      addToast('Failed to update document name', 'error')
+      setDocumentTitle(document.title) // Revert on error
     }
   }
 
@@ -197,12 +222,34 @@ export const DocumentEdit = () => {
     }
   }
 
+  const handleDownloadVersion = async () => {
+    try {
+      setDownloadingVersion(true)
+      const blob = await downloadVersion()
+      
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')  // ← now safe to use
+      link.href = url
+      link.download = `${documentData.title}_v${version.version_number}_signed.pdf`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      addToast('PDF downloaded successfully', 'success')
+    } catch (err) {
+      addToast('Failed to download PDF: ' + (err.response?.data?.error || err.message), 'error')
+    } finally {
+      setDownloadingVersion(false)
+    }
+  }
+
   const canUpdateFieldValue = (field) => {
     // In locked mode, can only update value if field is not locked
     return !field.locked
   }
 
-  if (!document || !version) {
+  if (!documentData || !version) {
     return <div className="p-8 text-center">Loading document...</div>
   }
 
@@ -233,32 +280,68 @@ export const DocumentEdit = () => {
         {/* Header */}
         <div className="bg-white border-b px-6 py-4 flex justify-between items-center">
           <div>
-            <h1 className="text-2xl font-bold">{document.title}</h1>
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={documentTitle}
+                  onChange={(e) => setDocumentTitle(e.target.value)}
+                  onBlur={handleSaveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveTitle()
+                    if (e.key === 'Escape') {
+                      setDocumentTitle(document.title)
+                      setIsEditingTitle(false)
+                    }
+                  }}
+                  autoFocus
+                  className="text-2xl font-bold px-2 py-1 border border-blue-500 rounded"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 
+                  className={`text-2xl font-bold ${
+                    isDraftMode 
+                      ? 'cursor-pointer hover:text-blue-600' 
+                      : 'cursor-default'
+                  }`}
+                  onClick={() => isDraftMode && setIsEditingTitle(true)}
+                >
+                  {documentData?.title}
+                </h1>
+                {isDraftMode && (
+                  <span className="text-xs text-gray-500 ml-2">Click to edit</span>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-4 mt-1">
               <p className="text-sm text-gray-600">
                 Status: <span className={`font-medium capitalize ${
-                  version.status === 'draft' ? 'text-blue-600' :
-                  version.status === 'completed' ? 'text-green-600' :
+                  version?.status === 'draft' ? 'text-blue-600' :
+                  version?.status === 'completed' ? 'text-green-600' :
                   'text-yellow-600'
-                }`}>{version.status}</span>
+                }`}>{version?.status}</span>
                 {isDraftMode && <span className="text-blue-600 ml-2">(Editable)</span>}
               </p>
               
               {/* Recipient badges */}
               {allRecipients.length > 0 && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 mt-1">
                   <span className="text-xs text-gray-500">Recipients:</span>
                   {allRecipients.map(recipient => {
+                    const recipientFields = fields.filter(f => f.recipient === recipient)
                     const stats = recipientStats[recipient]
                     return (
-                      <div key={recipient} className="relative group">
-                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      <span 
+                        key={recipient} 
+                        className={`px-2 py-1 rounded text-xs font-medium ${
                           stats?.completed ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-                        }`}>
-                          {recipient}
-                          {stats && ` (${stats.signed}/${stats.total})`}
-                        </span>
-                      </div>
+                        }`}
+                      >
+                        {recipient} ({stats?.signed || 0}/{stats?.total || recipientFields.length})
+                      </span>
                     )
                   })}
                 </div>
@@ -294,6 +377,18 @@ export const DocumentEdit = () => {
                 Links
               </button>
             </div>
+
+            {/* Download Button - Add this */}
+            {version?.status === 'completed' && (
+              <Button 
+                onClick={handleDownloadVersion} 
+                variant="secondary" 
+                size="sm"
+                disabled={downloadingVersion}
+              >
+                {downloadingVersion ? '⬇️ Downloading...' : '⬇️ Download PDF'}
+              </Button>
+            )}
 
             {isDraftMode && (
               <Button onClick={handleLockVersion} variant="warning" size="sm">

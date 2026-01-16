@@ -14,6 +14,8 @@ export const TemplateEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
   const [template, setTemplate] = useState(null)
+  const [templateTitle, setTemplateTitle] = useState('')
+  const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [fields, setFields] = useState([])
   const [selectedFieldId, setSelectedFieldId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -25,12 +27,13 @@ export const TemplateEdit = () => {
   const { execute: createField } = useApi((data) => templateAPI.createField(id, data))
   const { execute: updateField } = useApi((fid, data) => templateAPI.updateField(id, fid, data))
   const { execute: deleteField } = useApi((fid) => templateAPI.deleteField(id, fid))
+  const { execute: updateTemplate } = useApi((data) => templateAPI.update(id, data))
 
   const addToast = (message, type = 'info') => {
-    const id = Date.now()
-    setToasts([...toasts, { id, message, type, duration: 3000 }])
+    const toastId = Date.now()
+    setToasts([...toasts, { id: toastId, message, type, duration: 3000 }])
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
+      setToasts((prev) => prev.filter((t) => t.id !== toastId))
     }, 3000)
   }
 
@@ -42,6 +45,7 @@ export const TemplateEdit = () => {
     try {
       const data = await getTemplate()
       setTemplate(data)
+      setTemplateTitle(data.title)
       setFields(data.fields || [])
       
       // Extract all unique recipients from fields
@@ -51,6 +55,23 @@ export const TemplateEdit = () => {
       }
     } catch (err) {
       addToast('Failed to load template', 'error')
+    }
+  }
+
+  const handleSaveTitle = async () => {
+    if (!templateTitle.trim()) {
+      addToast('Template name cannot be empty', 'error')
+      return
+    }
+
+    try {
+      await updateTemplate({ title: templateTitle })
+      setTemplate({ ...template, title: templateTitle })
+      setIsEditingTitle(false)
+      addToast('Template name updated', 'success')
+    } catch (err) {
+      addToast('Failed to update template name', 'error')
+      setTemplateTitle(template.title) // Revert on error
     }
   }
 
@@ -158,7 +179,36 @@ if (fileUrl && !fileUrl.startsWith('http')) {
       <div className="flex-1 flex flex-col">
         <div className="bg-white border-b px-6 py-4 flex justify-between items-center">
           <div>
-            <h1 className="text-2xl font-bold">{template.title}</h1>
+            {isEditingTitle ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={templateTitle}
+                  onChange={(e) => setTemplateTitle(e.target.value)}
+                  onBlur={handleSaveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSaveTitle()
+                    if (e.key === 'Escape') {
+                      setTemplateTitle(template.title)
+                      setIsEditingTitle(false)
+                    }
+                  }}
+                  autoFocus
+                  className="text-2xl font-bold px-2 py-1 border border-blue-500 rounded"
+                />
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <h1 
+                  className="text-2xl font-bold cursor-pointer hover:text-blue-600"
+                  onClick={() => setIsEditingTitle(true)}
+                >
+                  {template?.title}
+                </h1>
+                <span className="text-xs text-gray-500 ml-2">Click to edit</span>
+              </div>
+            )}
+
             {addingFieldType && (
               <p className="text-sm text-blue-600 mt-1">
                 Click on the PDF to add a {addingFieldType} field
@@ -264,6 +314,7 @@ if (fileUrl && !fileUrl.startsWith('http')) {
         </div>
       </div>
 
+      {/* Toast Notifications */}
       {toasts.map((toast) => (
         <Toast
           key={toast.id}

@@ -24,6 +24,8 @@ export const templateAPI = {
   
   get: (id) => api.get(`/templates/${id}/`),
   
+  update: (id, data) => api.patch(`/templates/${id}/`, data),  // ← Add this
+  
   getRecipients: (templateId) => api.get(`/templates/${templateId}/recipients/`),
   
   createField: (templateId, fieldData) =>
@@ -59,11 +61,18 @@ export const documentAPI = {
   
   get: (id) => api.get(`/documents/${id}/`),
   
+  update: (id, data) => api.patch(`/documents/${id}/`, data),  // ← Add this
+  
   // Document versions
-  getVersions: (docId) => api.get(`/documents/${docId}/versions/`),
+  getVersions: (docId) => docId 
+    ? api.get(`/documents/${docId}/versions/`)
+    : api.get(`/documents/versions/`),  // ← This should hit the paginated endpoint
   
   getVersion: (docId, versionId) =>
     api.get(`/documents/${docId}/versions/${versionId}/`),
+  
+  copyVersion: (docId, versionId) =>
+    api.post(`/documents/${docId}/versions/${versionId}/copy/`),
   
   lockVersion: (docId, versionId) =>
     api.post(`/documents/${docId}/versions/${versionId}/lock/`),
@@ -83,6 +92,11 @@ export const documentAPI = {
   
   deleteField: (docId, versionId, fieldId) =>
     api.delete(`/documents/${docId}/versions/${versionId}/fields/${fieldId}/`),
+  
+  downloadVersion: (docId, versionId) =>
+    api.get(`/documents/${docId}/versions/${versionId}/download/`, {
+      responseType: 'blob'
+    }),
 }
 
 // Signing token endpoints
@@ -106,6 +120,12 @@ export const publicAPI = {
   submitSignature: (token, signData) =>
     api.post(`/documents/public/sign/${token}/`, signData, {
       headers: { 'Authorization': '' },
+    }),
+  
+  downloadPublicVersion: (token) =>
+    api.get(`/documents/public/download/${token}/`, {
+      headers: { 'Authorization': '' },
+      responseType: 'blob'
     }),
 }
 
