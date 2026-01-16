@@ -3,7 +3,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated  # ✅ ADD IsAuthenticated
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -19,22 +19,24 @@ import os
 import zipfile
 import json
 from datetime import datetime
+from django.conf import settings  # ✅ ADD THIS if not present
 
 
 from .models import (
     Document, DocumentVersion, DocumentField,
-    SigningToken, SignatureEvent
+    SigningToken, SignatureEvent, Webhook, WebhookEvent
 )
-from templates.models import Template  # ← Add this line
+from templates.models import Template
 from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer,
     DocumentCreateSerializer, DocumentVersionSerializer,
     DocumentFieldSerializer, DocumentFieldUpdateSerializer,
     SigningTokenSerializer, SigningTokenCreateSerializer,
     SignatureEventSerializer, PublicSignPayloadSerializer,
-    PublicSignResponseSerializer
+    PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
 from .services import get_pdf_flattening_service
+from .services.webhook_service import WebhookService
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
@@ -590,6 +592,49 @@ class PublicSignViewSet(viewsets.ViewSet):
             
             # Update version status based on completion
             version.update_status()
+            
+            # ✅ TRIGGER WEBHOOK: Signature Created
+            WebhookService.trigger_event(
+                event_type='document.signature_created',
+                payload={
+                    'document_id': version.document.id,
+                    'document_title': version.document.title,
+                    'version_id': version.id,
+                    'version_number': version.version_number,
+                    'signature_id': signature_event.id,
+                    'signer_name': signer_name,
+                    'recipient': recipient,
+                    'signed_at': signature_event.signed_at.isoformat(),
+                    'field_values': signature_event.field_values,
+                    'ip_address': signature_event.ip_address,
+                }
+            )
+            
+            # ✅ TRIGGER WEBHOOK: Document Completed (if all signed)
+            if version.status == 'completed':
+                WebhookService.trigger_event(
+                    event_type='document.completed',
+                    payload={
+                        'document_id': version.document.id,
+                        'document_title': version.document.title,
+                        'version_id': version.id,
+                        'version_number': version.version_number,
+                        'status': version.status,
+                        'completed_at': timezone.now().isoformat(),
+                        'signatures_count': version.signatures.count(),
+                        'all_signatures': [
+                            {
+                                'id': sig.id,
+                                'signer_name': sig.signer_name,
+                                'recipient': sig.recipient,
+                                'signed_at': sig.signed_at.isoformat(),
+                            }
+                            for sig in version.signatures.all()
+                        ],
+                        'download_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/download/',
+                        'audit_export_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/audit_export/',
+                    }
+                )
         
             response_serializer = PublicSignResponseSerializer({
             'signature_id': signature_event.id,
@@ -811,3 +856,123 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                 {'error': f'Failed to generate audit export: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class WebhookViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for managing webhooks.
+    
+    Endpoints:
+    - POST /webhooks/               → Create webhook
+    - GET /webhooks/                → List webhooks
+    - GET /webhooks/{id}/           → Retrieve webhook
+    - PATCH /webhooks/{id}/         → Update webhook
+    - DELETE /webhooks/{id}/        → Delete webhook
+    - GET /webhooks/{id}/events/    → List events for webhook
+    - POST /webhooks/{id}/test/     → Send test event
+    """
+    queryset = Webhook.objects.all()
+    serializer_class = WebhookSerializer
+    permission_classes = [AllowAny]  # ✅ CHANGED from [IsAuthenticated]
+    pagination_class = PageNumberPagination
+    
+    def get_queryset(self):
+        """Only show active webhooks."""
+        return Webhook.objects.filter(is_active=True)
+    
+    @action(detail=True, methods=['get'])
+    def events(self, request, pk=None):
+        """List all events for a webhook."""
+        webhook = self.get_object()
+        events = webhook.webhook_events.all().order_by('-created_at')
+        
+        page = self.paginate_queryset(events)
+        if page is not None:
+            serializer = WebhookEventSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = WebhookEventSerializer(events, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'])
+    def test(self, request, pk=None):
+        """Send a test webhook event."""
+        webhook = self.get_object()
+        
+        test_payload = {
+            'event_type': 'document.test',
+            'message': 'This is a test webhook',
+            'timestamp': timezone.now().isoformat(),
+        }
+        
+        event = WebhookEvent.objects.create(
+            webhook=webhook,
+            event_type='document.test',
+            payload=test_payload,
+            status='pending'
+        )
+        
+        from .services.webhook_service import WebhookService
+        WebhookService.deliver_event(event)
+        
+        return Response({
+            'status': 'Test webhook sent',
+            'event_id': event.id,
+            'delivery_status': event.status,
+        })
+    
+    @action(detail=True, methods=['post'])
+    def retry(self, request, pk=None):
+        """Retry a failed webhook event."""
+        webhook = self.get_object()
+        event_id = request.data.get('event_id')
+        
+        try:
+            event = WebhookEvent.objects.get(id=event_id, webhook=webhook)
+            
+            if event.status != 'failed':
+                return Response(
+                    {'error': f'Can only retry failed events (current: {event.status})'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            event.status = 'pending'
+            event.attempt_count = 0
+            event.save()
+            
+            from .services.webhook_service import WebhookService
+            WebhookService.deliver_event(event)
+            
+            return Response({
+                'status': 'Webhook retry initiated',
+                'event_id': event.id,
+            })
+        except WebhookEvent.DoesNotExist:
+            return Response(
+                {'error': 'Event not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only endpoints for webhook events.
+    """
+    queryset = WebhookEvent.objects.all()
+    serializer_class = WebhookEventSerializer
+    permission_classes = [AllowAny]  # ✅ CHANGED from [IsAuthenticated]
+    pagination_class = PageNumberPagination
+    
+    @action(detail=True, methods=['get'])
+    def logs(self, request, pk=None):
+        """Get delivery logs for a webhook event."""
+        event = self.get_object()
+        logs = event.delivery_logs.all().order_by('-created_at')
+        
+        page = self.paginate_queryset(logs)
+        if page is not None:
+            serializer = WebhookDeliveryLogSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = WebhookDeliveryLogSerializer(logs, many=True)
+        return Response(serializer.data)

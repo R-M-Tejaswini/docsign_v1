@@ -6,6 +6,7 @@ import { DocumentEdit } from './pages/DocumentEdit'
 import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
+import { WebhooksPage } from './pages/WebhooksPage'  // ✅ ADD
 
 function Navigation() {
   const location = useLocation()
@@ -35,6 +36,12 @@ function Navigation() {
             >
               Documents
             </Link>
+            <Link
+              to="/webhooks"  // ✅ ADD
+              className="text-gray-600 hover:text-gray-900 font-medium transition-colors"
+            >
+              🪝 Webhooks
+            </Link>
           </div>
         </div>
       </div>
@@ -57,6 +64,7 @@ function App() {
           <Route path="/templates" element={<TemplatesList />} />
           <Route path="/templates/:id" element={<TemplateEdit />} />
           <Route path="/sign/:token" element={<PublicSign />} />
+          <Route path="/webhooks" element={<WebhooksPage />} />  {/* ✅ ADD */}
         </Routes>
       </div>
     </Router>
