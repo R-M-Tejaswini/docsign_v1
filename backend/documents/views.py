@@ -8,6 +8,15 @@ from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.pagination import PageNumberPagination
+from django.http import HttpResponse
+from io import BytesIO
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+import io
+import traceback
+import os
+
 
 from .models import (
     Document, DocumentVersion, DocumentField,
@@ -22,7 +31,7 @@ from .serializers import (
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer
 )
-
+from .services import get_pdf_flattening_service
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
@@ -269,6 +278,59 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         serializer = DocumentVersionSerializer(new_version, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+    
+    @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/download')
+    def download_version(self, request, pk=None, version_id=None):
+        """Download version PDF with flattened signatures."""
+        document = self.get_object()
+        version = get_object_or_404(document.versions, id=version_id)
+        
+        # Only allow download if completed
+        if version.status != 'completed':
+            return Response(
+                {'error': 'Document must be completed before downloading'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Check if signed_file exists
+            if version.signed_file:
+                file_path = version.signed_file.path
+                if os.path.exists(file_path):
+                    with open(file_path, 'rb') as pdf_file:
+                        response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                        response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
+                        return response
+        
+            # If no signed_file or it doesn't exist, generate it
+            service = get_pdf_flattening_service()
+            service.flatten_and_save(version)
+            
+            # Verify the file was created
+            if not version.signed_file or not os.path.exists(version.signed_file.path):
+                return Response(
+                    {'error': 'Failed to generate signed PDF'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+            
+            # Stream the newly created file
+            with open(version.signed_file.path, 'rb') as pdf_file:
+                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
+                return response
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to generate PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def flatten_signatures_on_pdf(self, pdf_path, version):
+        """DEPRECATED: Use PDFFlatteningService instead."""
+        service = get_pdf_flattening_service()
+        return service.flatten_version(version)
 
 
 class SigningTokenViewSet(viewsets.ViewSet):
@@ -465,7 +527,6 @@ class PublicSignViewSet(viewsets.ViewSet):
             required=True,
             locked=False
         )
-        
         filled_field_ids = set(field_ids)
         missing_required = required_recipient_fields.exclude(id__in=filled_field_ids)
         
@@ -517,7 +578,7 @@ class PublicSignViewSet(viewsets.ViewSet):
             # Update version status based on completion
             version.update_status()
         
-        response_serializer = PublicSignResponseSerializer({
+            response_serializer = PublicSignResponseSerializer({
             'signature_id': signature_event.id,
             'message': 'Document signed successfully',
             'version_status': version.status,
@@ -536,3 +597,56 @@ class PublicSignViewSet(viewsets.ViewSet):
         else:
             ip = request.META.get('REMOTE_ADDR')
         return ip
+
+    def get_recipients(self, obj):
+        """Get list of unique recipients from the model method."""
+        return obj.get_recipients()  # This should already be deduped in the model
+    
+    def flatten_signatures_on_pdf(self, pdf_path, version):
+        """DEPRECATED: Use PDFFlatteningService instead."""
+        service = get_pdf_flattening_service()
+        return service.flatten_version(version)
+    
+    @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
+    def download_public(self, request, token=None):
+        """Download signed PDF from public link."""
+        try:
+            signing_token = SigningToken.objects.select_related('version').get(token=token)
+        except SigningToken.DoesNotExist:
+            return Response({'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
+        
+        version = signing_token.version
+        
+        # Only allow download if completed
+        if version.status != 'completed':
+            return Response(
+                {'error': 'Document is not yet complete'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Generate or retrieve signed PDF
+            if not version.signed_file:
+                service = get_pdf_flattening_service()
+                service.flatten_and_save(version)
+            
+            # Verify file exists
+            if not version.signed_file or not os.path.exists(version.signed_file.path):
+                return Response(
+                    {'error': 'PDF file not found'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Stream the file
+            with open(version.signed_file.path, 'rb') as pdf_file:
+                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
+                response['Content-Disposition'] = f'attachment; filename="{version.document.title}_signed.pdf"'
+                return response
+                
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to generate PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

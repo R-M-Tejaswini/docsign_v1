@@ -17,10 +17,14 @@ export const PublicSign = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [submitting, setSubmitting] = useState(false)
   const [toasts, setToasts] = useState([])
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
 
   const { execute: getSignPage } = useApi(() => publicAPI.getSignPage(token))
   const { execute: submitSignature } = useApi((signData) =>
     publicAPI.submitSignature(token, signData)
+  )
+  const { execute: downloadVersion } = useApi(() =>
+    publicAPI.downloadPublicVersion(token)
   )
 
   const addToast = (message, type = 'info') => {
@@ -48,6 +52,51 @@ export const PublicSign = () => {
       setFieldValues(initialValues)
     } catch (err) {
       const errorData = err.response?.data
+      
+      // Handle 403 Forbidden (revoked, expired, or already used)
+      if (err.response?.status === 403) {
+        if (errorData?.revoked) {
+          setPageData({
+            error: 'This link has been revoked',
+            errorType: 'revoked',
+            token_status: 'invalid',
+            revoked: true
+          })
+        } else if (errorData?.expired) {
+          setPageData({
+            error: 'This link has expired',
+            errorType: 'expired',
+            token_status: 'invalid',
+            expired: true
+          })
+        } else if (errorData?.used) {
+          setPageData({
+            error: 'This signing link has already been used',
+            errorType: 'used',
+            token_status: 'invalid',
+            used: true
+          })
+        } else {
+          setPageData({
+            error: errorData?.error || 'Access denied to this document',
+            errorType: 'forbidden',
+            token_status: 'invalid'
+          })
+        }
+        return
+      }
+
+      // Handle 404 (invalid token)
+      if (err.response?.status === 404) {
+        setPageData({
+          error: 'Invalid or expired token',
+          errorType: 'notfound',
+          token_status: 'invalid'
+        })
+        return
+      }
+
+      // Handle other errors
       if (errorData?.token_status === 'invalid') {
         // Show specific error for expired/revoked tokens
         if (errorData.revoked) {
@@ -148,6 +197,28 @@ export const PublicSign = () => {
     }
   }
 
+  const handleDownloadPdf = async () => {
+    try {
+      setDownloadingPdf(true)
+      const blob = await downloadVersion()
+      
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${pageData.version?.document?.title}_signed.pdf`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      addToast('PDF downloaded successfully', 'success')
+    } catch (err) {
+      addToast('Failed to download PDF', 'error')
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }
+
   if (!pageData) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -161,15 +232,35 @@ export const PublicSign = () => {
 
   // Handle error states
   if (pageData.error) {
+    let icon = '⚠️'
+    let title = 'Access Denied'
+    let description = pageData.error
+    let showRetry = false
+
+    if (pageData.errorType === 'revoked') {
+      icon = '🔗'
+      title = 'Link Revoked'
+      description = 'This signing link has been revoked and is no longer accessible.'
+    } else if (pageData.errorType === 'expired') {
+      icon = '⏰'
+      title = 'Link Expired'
+      description = 'This signing link has expired. Please request a new one.'
+    } else if (pageData.errorType === 'used') {
+      icon = '✓'
+      title = 'Already Signed'
+      description = 'This document has already been signed with this link.'
+    } else if (pageData.errorType === 'notfound') {
+      icon = '❌'
+      title = 'Invalid Link'
+      description = 'The link you provided is invalid or does not exist.'
+    }
+
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
         <div className="bg-white rounded-lg shadow-lg p-8 max-w-md text-center">
-          <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h2>
-          <p className="text-gray-600 mb-4">{pageData.error}</p>
-          <Button onClick={() => navigate('/')} variant="primary">
-            Go to Home
-          </Button>
+          <div className="text-5xl mb-4">{icon}</div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">{title}</h2>
+          <p className="text-gray-600 mb-6">{description}</p>
         </div>
       </div>
     )
@@ -357,15 +448,19 @@ export const PublicSign = () => {
                               handleFieldChange(field.id, e.target.value)
                             }
                             placeholder={field.label}
-                            className="w-full h-full px-2 py-1 border-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-20"  // ← Updated classes
+                            className="w-full h-full px-2 py-1 border-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-20"
                             style={{
                               fontSize: `${Math.max(10, pxField.height * scale * 0.5)}px`,
                               borderColor: recipientColor.color,
-                              backgroundColor: '#ffffff',  // ← Changed to white
-                              boxSizing: 'border-box',  // ← Add this
+                              backgroundColor: '#ffffff',
+                              boxSizing: 'border-box',
+                              // Apply handwriting font to signature fields
+                              fontFamily: field.field_type === 'signature' ? "'Dancing Script', cursive" : 'inherit',
+                              fontWeight: field.field_type === 'signature' ? '700' : 'normal',
+                              letterSpacing: field.field_type === 'signature' ? '0.5px' : 'normal',
                             }}
                             title={field.label}
-                            autoComplete="off"  // ← Add this
+                            autoComplete="off"
                           />
                         )}
                       </div>
@@ -404,18 +499,9 @@ export const PublicSign = () => {
                   type="text"
                   value={signerName}
                   onChange={(e) => setSignerName(e.target.value)}
-                  placeholder="Sign here..."
+                  placeholder="Name here..."
                   className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none text-center text-xl transition-colors"
-                  style={{
-                    fontFamily: "'Dancing Script', cursive",
-                    fontWeight: '700',
-                    fontSize: '24px',
-                    letterSpacing: '0.5px'
-                  }}
                 />
-                <p className="text-xs text-gray-500 text-center">
-                  (Signature will appear in handwriting style)
-                </p>
               </div>
 
               {/* Fields Summary */}
@@ -567,6 +653,18 @@ export const PublicSign = () => {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Download Button */}
+          {pageData.version?.status === 'completed' && (
+            <Button
+              onClick={handleDownloadPdf}
+              variant="primary"
+              className="w-full"
+              disabled={downloadingPdf}
+            >
+              {downloadingPdf ? 'Downloading...' : '⬇️ Download Signed PDF'}
+            </Button>
           )}
 
           {/* Legend */}

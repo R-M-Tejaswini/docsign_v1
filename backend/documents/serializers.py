@@ -58,6 +58,7 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
     document_title = serializers.SerializerMethodField()
     document_description = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
+    signed_file_url = serializers.SerializerMethodField()
     recipients = serializers.SerializerMethodField()
     recipient_status = serializers.SerializerMethodField()
     fields = DocumentFieldSerializer(many=True, read_only=True)  # ← Make sure this is here
@@ -66,7 +67,7 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         model = DocumentVersion
         fields = [
             'id', 'version_number', 'status', 'page_count', 'created_at',
-            'file', 'file_url', 'fields', 'recipients', 'recipient_status',
+            'file', 'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
             'document_id', 'document_title', 'document_description'
         ]
     
@@ -80,14 +81,26 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         return obj.document.description
     
     def get_file_url(self, obj):
-        """Get the file URL from the file field."""
+        """Return the correct file URL."""
         if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
             return obj.file.url
+        return None
+    
+    def get_signed_file_url(self, obj):
+        """Return signed file URL if available."""
+        if obj.signed_file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.signed_file.url)
+            return obj.signed_file.url
         return None
     
     def get_recipients(self, obj):
         """Get list of unique recipients from the model method."""
-        return obj.get_recipients()
+        return obj.get_recipients()  # Already deduped by model
     
     def get_recipient_status(self, obj):
         """Get recipient status from the model method."""
@@ -118,7 +131,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = ['id', 'title', 'description', 'status', 'version_count', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'created_at']  # ← Make sure 'title' is NOT here
     
     def get_status(self, obj):
         """Get status of latest version."""

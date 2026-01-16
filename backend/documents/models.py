@@ -47,6 +47,12 @@ class DocumentVersion(models.Model):
     )
     version_number = models.PositiveIntegerField(default=1)
     file = models.FileField(upload_to=document_version_upload_path)
+    signed_file = models.FileField(
+        upload_to=document_version_upload_path,
+        null=True,
+        blank=True,
+        help_text="Flattened PDF with all signatures and overlays merged"
+    )
     status = models.CharField(
         max_length=20,
         choices=[
@@ -84,8 +90,10 @@ class DocumentVersion(models.Model):
     
     def get_recipients(self):
         """Get list of unique recipients assigned to fields."""
+        # Use .distinct() to remove duplicates
         recipients = self.fields.values_list('recipient', flat=True).distinct()
-        return sorted([r for r in recipients if r])
+        # Filter out empty strings and sort
+        return sorted([r for r in recipients if r and r.strip()])
     
     def get_recipient_status(self):
         """
@@ -190,6 +198,15 @@ class DocumentVersion(models.Model):
                 self.status = 'locked'
         
         self.save(update_fields=['status'])
+        
+        # Auto-generate signed PDF when completed
+        if self.status == 'completed' and not self.signed_file:
+            try:
+                from .services import get_pdf_flattening_service
+                service = get_pdf_flattening_service()
+                service.flatten_and_save(self)
+            except Exception as e:
+                print(f"⚠️  Failed to auto-generate signed PDF: {e}")
 
 
 class DocumentField(models.Model):

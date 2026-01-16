@@ -35,12 +35,11 @@ class Template(models.Model):
     
     def get_recipients(self):
         """Get list of unique recipients for this template."""
-        return list(
-            self.fields
-            .values_list('recipient', flat=True)
-            .distinct()
-            .filter(recipient__isnull=False)
-        )
+        return sorted(list(
+            set(self.fields
+                .values_list('recipient', flat=True)
+                .filter(recipient__isnull=False))
+        ))
     
     def save(self, *args, **kwargs):
         # Extract page count from PDF if not set

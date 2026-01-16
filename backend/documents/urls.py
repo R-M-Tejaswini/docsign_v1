@@ -30,6 +30,12 @@ urlpatterns = [
         'get': 'versions'
     }), name='document-versions'),
     
+    # ⚠️ CRITICAL: Download MUST come BEFORE version_detail
+    path('<int:pk>/versions/<int:version_id>/download/', DocumentViewSet.as_view({
+        'get': 'download_version'
+    }), name='document-version-download'),
+    
+    # Generic version detail (catches all <int:version_id>/ patterns)
     path('<int:pk>/versions/<int:version_id>/', DocumentViewSet.as_view({
         'get': 'version_detail'
     }), name='document-version-detail'),
@@ -37,6 +43,10 @@ urlpatterns = [
     path('<int:pk>/versions/<int:version_id>/lock/', DocumentViewSet.as_view({
         'post': 'lock_version'
     }), name='document-version-lock'),
+    
+    path('<int:pk>/versions/<int:version_id>/copy/', DocumentViewSet.as_view({
+        'post': 'copy_version'
+    }), name='document-version-copy'),
     
     path('<int:pk>/versions/<int:version_id>/recipients/', DocumentViewSet.as_view({
         'get': 'available_recipients'
@@ -71,7 +81,7 @@ urlpatterns = [
         'post': 'submit_signature'
     }), name='public-sign'),
     
-    path('<int:pk>/versions/<int:version_id>/copy/', DocumentViewSet.as_view({
-        'post': 'copy_version'
-    }), name='document-version-copy'),
+    path('public/download/<str:token>/', PublicSignViewSet.as_view({
+        'get': 'download_public'
+    }), name='public-download'),
 ]

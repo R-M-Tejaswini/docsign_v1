@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { useApi } from '../hooks/useApi'
@@ -7,6 +7,7 @@ import { templateAPI } from '../services/api'
 
 export const TemplatesList = () => {
   const navigate = useNavigate()
+  const location = useLocation()  // ← Add this
   const [templates, setTemplates] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newTemplateTitle, setNewTemplateTitle] = useState('')
@@ -16,15 +17,26 @@ export const TemplatesList = () => {
 
   useEffect(() => {
     loadTemplates()
-  }, [])
+  }, [location])  // ← Reload when navigating back
 
   const loadTemplates = async () => {
     try {
-      const data = await listTemplates()
-      // Handle both array and paginated responses
-      setTemplates(data.results || data || [])
+      const axiosResponse = await listTemplates()
+      // Extract data from axios response
+      const data = axiosResponse.data || axiosResponse
+      
+      let templatesArray = []
+      if (data && typeof data === 'object') {
+        if (Array.isArray(data)) {
+          templatesArray = data
+        } else if (data.results && Array.isArray(data.results)) {
+          templatesArray = data.results
+        }
+      }
+      setTemplates(templatesArray)
     } catch (err) {
       console.error('Failed to load templates:', err)
+      setTemplates([])
     }
   }
 
@@ -47,6 +59,7 @@ export const TemplatesList = () => {
       setShowCreateModal(false)
       setNewTemplateTitle('')
       setNewTemplateFile(null)
+      await loadTemplates()  // ← Reload after creating
       navigate(`/templates/${newTemplate.id}`)
     } catch (err) {
       alert('Failed to create template')
@@ -187,7 +200,7 @@ export const TemplatesList = () => {
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-gray-600">Fields:</span>
                     <span className="font-medium text-gray-900">
-                      {template.fields?.length || '0'}
+                      {template.field_count || template.fields?.length || '0'}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs text-gray-500">

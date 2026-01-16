@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { useApi } from '../hooks/useApi'
@@ -8,6 +8,7 @@ import { getRecipientBadgeClasses } from '../utils/recipientColors'
 
 export const DocumentsList = () => {
   const navigate = useNavigate()
+  const location = useLocation()  // ← Add this
   const [documentVersions, setDocumentVersions] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newDocTitle, setNewDocTitle] = useState('')
@@ -15,6 +16,7 @@ export const DocumentsList = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [templates, setTemplates] = useState([])
   const [copyingVersionId, setCopyingVersionId] = useState(null)
+  const [downloadingVersionId, setDownloadingVersionId] = useState(null)
   const [createMode, setCreateMode] = useState('template') // 'template' or 'upload'
   
   const { execute: listDocuments, loading } = useApi(() => documentAPI.list())
@@ -22,11 +24,14 @@ export const DocumentsList = () => {
   const { execute: copyDocumentVersion } = useApi((docId, versionId) =>
     documentAPI.copyVersion(docId, versionId)
   )
+  const { execute: downloadVersion } = useApi((docId, versionId) =>
+    documentAPI.downloadVersion(docId, versionId)
+  )
 
   useEffect(() => {
     loadDocuments()
     loadTemplates()
-  }, [])
+  }, [location.pathname])  // ← Reload when navigating back
 
   const loadDocuments = async () => {
     try {
@@ -115,12 +120,33 @@ export const DocumentsList = () => {
     try {
       setCopyingVersionId(versionId)
       const newVersion = await copyDocumentVersion(documentId, versionId)
-      await loadDocuments()
+      await loadDocuments()  // ← Refresh list
       navigate(`/documents/${documentId}`)
     } catch (err) {
       alert('Failed to copy version: ' + (err.response?.data?.error || err.message))
     } finally {
       setCopyingVersionId(null)
+    }
+  }
+
+  const handleDownloadVersion = async (documentTitle, versionId, documentId) => {
+    try {
+      setDownloadingVersionId(versionId)
+      const blob = await downloadVersion(documentId, versionId)
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${documentTitle}_v${versionId}_signed.pdf`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      alert('Failed to download PDF: ' + (err.response?.data?.error || err.message))
+    } finally {
+      setDownloadingVersionId(null)
     }
   }
 
@@ -137,6 +163,12 @@ export const DocumentsList = () => {
         text: 'text-yellow-800',
         icon: '🔒',
         label: 'Locked'
+      },
+      'partially_signed': {
+        bg: 'bg-purple-100',
+        text: 'text-purple-800',
+        icon: '⏳',
+        label: 'Signing'
       },
       'in-progress': {
         bg: 'bg-purple-100',
@@ -280,7 +312,7 @@ export const DocumentsList = () => {
                   <option value="">-- Select a template --</option>
                   {templates.map((template) => (
                     <option key={template.id} value={template.id}>
-                      {template.title} ({template.page_count} pages • {template.fields?.length || 0} fields)
+                      {template.title}
                     </option>
                   ))}
                 </select>
@@ -424,12 +456,12 @@ export const DocumentsList = () => {
                     {allRecipients.length > 0 && (
                       <div>
                         <span className="text-xs font-medium text-gray-600 block mb-2">
-                          Recipients ({allRecipients.length})
+                          Recipients ({Array.from(new Set(allRecipients)).length})
                         </span>
                         <div className="flex flex-wrap gap-1">
-                          {allRecipients.map((recipient, idx) => (
+                          {Array.from(new Set(allRecipients)).map((recipient, idx) => (
                             <span
-                              key={`${version.id}-recipient-${idx}`}
+                              key={`${version.id}-recipient-${idx}-${recipient}`}
                               className={`${getRecipientBadgeClasses(recipient, allRecipients)} text-xs`}
                             >
                               {recipient}
@@ -467,6 +499,18 @@ export const DocumentsList = () => {
                         disabled={copyingVersionId === version.id}
                       >
                         {copyingVersionId === version.id ? 'Copying...' : '📋 Create New Version'}
+                      </Button>
+                    )}
+
+                    {/* Download PDF Button - only for locked/completed versions */}
+                    {isLocked && version.status === 'completed' && (
+                      <Button
+                        onClick={() => handleDownloadVersion(version.document_title, version.id, version.document_id)}
+                        variant="secondary"
+                        className="w-full"
+                        disabled={downloadingVersionId === version.id}
+                      >
+                        {downloadingVersionId === version.id ? 'Downloading...' : '⬇️ Download PDF'}
                       </Button>
                     )}
                   </div>

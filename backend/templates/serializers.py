@@ -45,7 +45,8 @@ class TemplateSerializer(serializers.ModelSerializer):
     
     def get_recipients(self, obj):
         """Get list of unique recipients."""
-        return obj.get_recipients()
+        recipients = obj.get_recipients()
+        return sorted(list(set(recipients)))  # Ensure deduplication
 
 
 class TemplateListSerializer(serializers.ModelSerializer):
@@ -59,7 +60,7 @@ class TemplateListSerializer(serializers.ModelSerializer):
             'id', 'title', 'description', 'page_count',
             'field_count', 'recipient_count', 'created_at'
         ]
-        read_only_fields = fields
+        read_only_fields = ['id', 'page_count', 'created_at']
     
     def get_field_count(self, obj):
         """Get number of fields."""
