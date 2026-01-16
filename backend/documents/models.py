@@ -53,6 +53,15 @@ class DocumentVersion(models.Model):
         blank=True,
         help_text="Flattened PDF with all signatures and overlays merged"
     )
+    
+    # NEW: Flattened PDF integrity hash
+    signed_pdf_sha256 = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        help_text="SHA256 hash of the flattened/signed PDF file"
+    )
+    
     status = models.CharField(
         max_length=20,
         choices=[
@@ -170,6 +179,26 @@ class DocumentVersion(models.Model):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
     
+    def compute_signed_pdf_hash(self):
+        """Compute SHA256 hash of the signed/flattened PDF file."""
+        if not self.signed_file:
+            return None
+        
+        sha256_hash = hashlib.sha256()
+        try:
+            with self.signed_file.open('rb') as f:
+                for byte_block in iter(lambda: f.read(4096), b""):
+                    sha256_hash.update(byte_block)
+            return sha256_hash.hexdigest()
+        except Exception as e:
+            print(f"❌ Error computing signed PDF hash: {e}")
+            return None
+    
+    def update_signed_pdf_hash(self):
+        """Update signed_pdf_sha256 after flattening."""
+        self.signed_pdf_sha256 = self.compute_signed_pdf_hash()
+        self.save(update_fields=['signed_pdf_sha256'])
+
     def update_status(self):
         """
         Update document status based on recipient completion.
@@ -378,7 +407,7 @@ class SignatureEvent(models.Model):
     )
     recipient = models.CharField(
         max_length=100,
-        default='Recipient 1',  # ← Add this
+        default='Recipient 1',
         help_text="Recipient identifier who signed"
     )
     signer_name = models.CharField(max_length=255)
@@ -388,6 +417,14 @@ class SignatureEvent(models.Model):
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True)
     document_sha256 = models.CharField(max_length=64, help_text="SHA256 hash of PDF at sign time")
+    
+    # NEW: Event-level integrity hash
+    event_hash = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        help_text="SHA256 hash of this signature event for tamper detection"
+    )
     
     # Field values at time of signing
     field_values = models.JSONField(
@@ -404,3 +441,36 @@ class SignatureEvent(models.Model):
     
     def __str__(self):
         return f"{self.signer_name} ({self.recipient}) signed {self.version} on {self.signed_at}"
+    
+    def compute_event_hash(self):
+        """
+        Compute tamper-evident hash for this signature event.
+        Called AFTER signed_at is set by auto_now_add.
+        """
+        import hashlib
+        import json
+        
+        hash_input = {
+            'document_sha256': self.document_sha256,
+            'field_values': sorted(self.field_values, key=lambda x: x['field_id']),
+            'signer_name': self.signer_name,
+            'recipient': self.recipient,
+            'signed_at': self.signed_at.isoformat(),  # Now safe
+            'token_id': self.token.id if self.token else None,
+            'version_id': self.version.id,
+        }
+        
+        hash_string = json.dumps(hash_input, sort_keys=True)
+        return hashlib.sha256(hash_string.encode()).hexdigest()
+
+# Signal handler - add OUTSIDE the class
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.utils import timezone
+
+@receiver(post_save, sender=SignatureEvent)
+def compute_signature_event_hash(sender, instance, created, **kwargs):
+    """Compute event_hash after initial creation (when signed_at is populated)."""
+    if created and not instance.event_hash:
+        instance.event_hash = instance.compute_event_hash()
+        instance.save(update_fields=['event_hash'])

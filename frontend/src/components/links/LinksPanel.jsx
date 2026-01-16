@@ -199,9 +199,21 @@ export const LinksPanel = ({ document, version }) => {
                   {/* Signature Events */}
                   {token.signatures && token.signatures.length > 0 && (
                     <div className="border-t pt-4">
-                      <label className="text-xs font-semibold text-gray-600 uppercase mb-2 block">
-                        Signature Events ({token.signatures.length})
-                      </label>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-xs font-semibold text-gray-600 uppercase">
+                          Signature Events ({token.signatures.length})
+                        </label>
+                        <Button
+                          onClick={() => {
+                            // Would need to pass context to open audit panel
+                            console.log('Open audit details for token', token.id)
+                          }}
+                          variant="secondary"
+                          size="xs"
+                        >
+                          🔍 View Audit
+                        </Button>
+                      </div>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
                         {token.signatures.map((sig, idx) => (
                           <div key={idx} className="text-xs p-3 bg-green-50 rounded border border-green-200">
