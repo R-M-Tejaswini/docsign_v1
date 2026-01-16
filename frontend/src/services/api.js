@@ -97,6 +97,14 @@ export const documentAPI = {
     api.get(`/documents/${docId}/versions/${versionId}/download/`, {
       responseType: 'blob'
     }),
+  
+  verifySignature: (docId, versionId, sigId) =>
+    api.get(`/documents/${docId}/versions/${versionId}/signatures/${sigId}/verify/`),
+  
+  downloadAuditExport: (docId, versionId) =>
+    api.get(`/documents/${docId}/versions/${versionId}/audit_export/`, {
+      responseType: 'blob'
+    }),
 }
 
 // Signing token endpoints

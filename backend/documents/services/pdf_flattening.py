@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from io import BytesIO
+from datetime import datetime
 
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -312,20 +313,25 @@ class PDFFlatteningService:
         
         return overlay_buffer
     
-    def flatten_and_save(self, document_version) -> str:
-        """Generate flattened PDF and save to signed_file field."""
-        pdf_bytes = self.flatten_version(document_version)
+    def flatten_and_save(self, version):
+        """Flatten signatures onto PDF and save, then compute hash."""
+        # ...existing flattening code...
         
-        filename = f"v{document_version.version_number}_signed.pdf"
-        
-        document_version.signed_file.save(
-            filename,
-            ContentFile(pdf_bytes),
-            save=True
-        )
-        
-        print(f"✓ Saved signed PDF: {document_version.signed_file.path}")
-        return document_version.signed_file.path
+        try:
+            # Perform flattening
+            flattened_pdf = self.flatten_version(version)
+            
+            # Save the flattened PDF
+            filename = f'v{version.version_number}_signed_{datetime.now().timestamp()}.pdf'
+            version.signed_file.save(filename, ContentFile(flattened_pdf))
+            
+            # Compute and store SHA256 of signed PDF
+            version.update_signed_pdf_hash()
+            
+            return version
+        except Exception as e:
+            print(f"❌ Error flattening PDF: {e}")
+            raise
 
 
 # Singleton instance

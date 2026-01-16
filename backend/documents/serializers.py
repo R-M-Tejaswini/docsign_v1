@@ -52,6 +52,28 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
         return data
 
 
+class SignatureEventSerializer(serializers.ModelSerializer):
+    """Serializer for SignatureEvent with verification data."""
+    signer_name_display = serializers.CharField(source='signer_name', read_only=True)
+    is_verified = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SignatureEvent
+        fields = [
+            'id', 'recipient', 'signer_name_display', 'signed_at',
+            'ip_address', 'user_agent', 'document_sha256', 'event_hash',
+            'field_values', 'is_verified'
+        ]
+        read_only_fields = fields
+    
+    def get_is_verified(self, obj):
+        """Check if event hash is still valid."""
+        if not obj.event_hash:
+            return None
+        current_hash = obj.compute_event_hash()
+        return current_hash == obj.event_hash
+
+
 class DocumentVersionSerializer(serializers.ModelSerializer):
     """Serializer for DocumentVersion."""
     document_id = serializers.SerializerMethodField()
@@ -61,14 +83,17 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
     signed_file_url = serializers.SerializerMethodField()
     recipients = serializers.SerializerMethodField()
     recipient_status = serializers.SerializerMethodField()
-    fields = DocumentFieldSerializer(many=True, read_only=True)  # ← Make sure this is here
+    fields = DocumentFieldSerializer(many=True, read_only=True)
+    signatures = SignatureEventSerializer(many=True, read_only=True)
+    signed_pdf_sha256 = serializers.CharField(read_only=True)
     
     class Meta:
         model = DocumentVersion
         fields = [
             'id', 'version_number', 'status', 'page_count', 'created_at',
             'file', 'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
-            'document_id', 'document_title', 'document_description'
+            'document_id', 'document_title', 'document_description', 'signatures',
+            'signed_pdf_sha256'
         ]
     
     def get_document_id(self, obj):
@@ -199,19 +224,6 @@ class DocumentCreateSerializer(serializers.Serializer):
             )
     
         return document
-
-
-class SignatureEventSerializer(serializers.ModelSerializer):
-    """Serializer for SignatureEvent."""
-    signer_name_display = serializers.CharField(source='signer_name', read_only=True)
-    
-    class Meta:
-        model = SignatureEvent
-        fields = [
-            'id', 'recipient', 'signer_name_display', 'signed_at',
-            'ip_address', 'document_sha256', 'field_values'
-        ]
-        read_only_fields = fields
 
 
 class SigningTokenSerializer(serializers.ModelSerializer):

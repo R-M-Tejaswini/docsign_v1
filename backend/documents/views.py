@@ -16,6 +16,9 @@ from reportlab.lib.pagesizes import letter
 import io
 import traceback
 import os
+import zipfile
+import json
+from datetime import datetime
 
 
 from .models import (
@@ -433,41 +436,50 @@ class PublicSignViewSet(viewsets.ViewSet):
         
         version = signing_token.version
         
-        # Determine editable fields based on token scope and recipient
-        editable_field_ids = []
-        is_editable = False
-        
-        if signing_token.scope == 'sign' and not signing_token.used:
-            # Sign token - only editable fields for this recipient
-            is_editable = True
-            editable_field_ids = list(
-                version.fields.filter(
-                    recipient=signing_token.recipient,
-                    locked=False
-                ).values_list('id', flat=True)
+        try:
+            # Determine editable fields based on token scope and recipient
+            editable_field_ids = []
+            is_editable = False
+            
+            if signing_token.scope == 'sign' and not signing_token.used:
+                # Sign token - only editable fields for this recipient
+                is_editable = True
+                editable_field_ids = list(
+                    version.fields.filter(
+                        recipient=signing_token.recipient,
+                        locked=False
+                    ).values_list('id', flat=True)
+                )
+            
+            # Get all fields with their current values
+            fields = version.fields.all()
+            fields_data = DocumentFieldSerializer(fields, many=True).data
+            
+            # Get all signature events for this version
+            signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
+                        version.signatures.all()
+            signatures_data = SignatureEventSerializer(signatures, many=True).data
+            
+            return Response({
+                'token': token,
+                'scope': signing_token.scope,
+                'recipient': signing_token.recipient,
+                'is_editable': is_editable,
+                'editable_field_ids': editable_field_ids,
+                'version': DocumentVersionSerializer(version).data,
+                'fields': fields_data,
+                'signatures': signatures_data,
+                'expires_at': signing_token.expires_at,
+                'recipient_status': version.get_recipient_status() if signing_token.recipient else None
+            })
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"❌ Error in get_sign_page: {e}")
+            return Response(
+                {'error': f'Internal server error: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
-        # Get all fields with their current values
-        fields = version.fields.all()
-        fields_data = DocumentFieldSerializer(fields, many=True).data
-        
-        # Get all signature events for this version
-        signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
-                    version.signatures.all()
-        signatures_data = SignatureEventSerializer(signatures, many=True).data
-        
-        return Response({
-            'token': token,
-            'scope': signing_token.scope,
-            'recipient': signing_token.recipient,
-            'is_editable': is_editable,
-            'editable_field_ids': editable_field_ids,
-            'version': DocumentVersionSerializer(version).data,
-            'fields': fields_data,
-            'signatures': signatures_data,
-            'expires_at': signing_token.expires_at,
-            'recipient_status': version.get_recipient_status() if signing_token.recipient else None
-        })
     
     @action(detail=False, methods=['post'], url_path='sign/(?P<token>[^/.]+)')
     def submit_signature(self, request, token=None):
@@ -553,7 +565,7 @@ class PublicSignViewSet(viewsets.ViewSet):
             # Compute document hash
             document_sha256 = version.compute_sha256()
             
-            # Create signature event
+            # Create signature event (event_hash computed in save())
             signature_event = SignatureEvent.objects.create(
                 version=version,
                 token=signing_token,
@@ -570,6 +582,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                     'recipient': recipient,
                     'fields_signed': len(field_values)
                 }
+                # event_hash is computed by signal after save
             )
             
             # Convert sign token to view-only
@@ -648,5 +661,153 @@ class PublicSignViewSet(viewsets.ViewSet):
             traceback.print_exc()
             return Response(
                 {'error': f'Failed to generate PDF: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class SignatureVerificationViewSet(viewsets.ViewSet):
+    """ViewSet for signature verification and audit exports."""
+    
+    @action(detail=False, methods=['get'], 
+            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures')
+    def list_signatures(self, request, doc_id=None, version_id=None):
+        """List all signatures for a document version."""
+        version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
+        signatures = version.signatures.all()
+        serializer = SignatureEventSerializer(signatures, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'], 
+            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures/(?P<sig_id>[0-9]+)/verify')
+    def verify_signature(self, request, doc_id=None, version_id=None, sig_id=None):
+        """Verify integrity of a specific signature event."""
+        version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
+        signature = get_object_or_404(SignatureEvent, id=sig_id, version=version)
+        
+        # Recompute event hash
+        current_event_hash = signature.compute_event_hash()
+        stored_event_hash = signature.event_hash
+        
+        # Check if PDF hash matches
+        current_pdf_hash = version.compute_sha256()
+        stored_pdf_hash = signature.document_sha256
+        
+        # Check if signed PDF hash matches (if available)
+        signed_pdf_valid = True
+        if version.signed_file and version.signed_pdf_sha256:
+            current_signed_pdf_hash = version.compute_signed_pdf_hash()
+            signed_pdf_valid = current_signed_pdf_hash == version.signed_pdf_sha256
+        
+        is_valid = (
+            current_event_hash == stored_event_hash and
+            current_pdf_hash == stored_pdf_hash and
+            signed_pdf_valid
+        )
+        
+        return Response({
+            'signature_id': signature.id,
+            'valid': is_valid,
+            'verification_details': {
+                'event_hash_match': current_event_hash == stored_event_hash,
+                'stored_event_hash': stored_event_hash,
+                'current_event_hash': current_event_hash,
+                'pdf_hash_match': current_pdf_hash == stored_pdf_hash,
+                'stored_pdf_hash': stored_pdf_hash,
+                'current_pdf_hash': current_pdf_hash,
+                'signed_pdf_hash_match': signed_pdf_valid,
+                'stored_signed_pdf_hash': version.signed_pdf_sha256,
+                'current_signed_pdf_hash': version.compute_signed_pdf_hash() if version.signed_file else None,
+            },
+            'signature': SignatureEventSerializer(signature).data
+        })
+    
+    @action(detail=False, methods=['get'], 
+            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/audit_export')
+    def audit_export(self, request, doc_id=None, version_id=None):
+        """Export complete audit package as ZIP."""
+        document = get_object_or_404(Document, id=doc_id)
+        version = get_object_or_404(DocumentVersion, id=version_id, document=document)
+        
+        if not version.signed_file:
+            return Response(
+                {'error': 'Signed PDF not yet generated'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            # Create ZIP in memory
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add signed PDF
+                if version.signed_file:
+                    pdf_filename = f"{document.title}_v{version.version_number}_signed.pdf"
+                    with version.signed_file.open('rb') as f:
+                        zipf.writestr(pdf_filename, f.read())
+                
+                # Build verification manifest
+                manifest = {
+                    'document_id': document.id,
+                    'document_title': document.title,
+                    'version_number': version.version_number,
+                    'status': version.status,
+                    'exported_at': datetime.now().isoformat(),
+                    'signed_pdf_sha256': version.signed_pdf_sha256,
+                    'original_file_sha256': version.compute_sha256(),
+                    'signatures': []
+                }
+                
+                # Add all signature events
+                for sig in version.signatures.all():
+                    sig_data = {
+                        'id': sig.id,
+                        'signer_name': sig.signer_name,
+                        'recipient': sig.recipient,
+                        'signed_at': sig.signed_at.isoformat(),
+                        'ip_address': sig.ip_address,
+                        'user_agent': sig.user_agent,
+                        'event_hash': sig.event_hash,
+                        'document_sha256': sig.document_sha256,
+                        'field_values': sig.field_values,
+                        'is_valid': sig.compute_event_hash() == sig.event_hash
+                    }
+                    manifest['signatures'].append(sig_data)
+                
+                # Write manifest
+                zipf.writestr('MANIFEST.json', json.dumps(manifest, indent=2))
+                
+                # Add detailed verification report
+                verification_report = {
+                    'verification_timestamp': datetime.now().isoformat(),
+                    'document_id': document.id,
+                    'version_id': version.id,
+                    'overall_status': 'VALID' if all(
+                        s['is_valid'] for s in manifest['signatures']
+                    ) else 'INVALID',
+                    'signatures_verified': len(manifest['signatures']),
+                    'audit_details': []
+                }
+                
+                for sig in version.signatures.all():
+                    is_valid = sig.compute_event_hash() == sig.event_hash
+                    verification_report['audit_details'].append({
+                        'signature_id': sig.id,
+                        'signer': sig.signer_name,
+                        'recipient': sig.recipient,
+                        'timestamp': sig.signed_at.isoformat(),
+                        'event_integrity': 'VALID' if is_valid else 'TAMPERED',
+                        'event_hash': sig.event_hash,
+                        'document_hash': sig.document_sha256,
+                    })
+                
+                zipf.writestr('VERIFICATION_REPORT.json', json.dumps(verification_report, indent=2))
+            
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="audit_export_{document.title}_v{version.version_number}.zip"'
+            return response
+        
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to generate audit export: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

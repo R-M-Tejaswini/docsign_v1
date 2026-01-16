@@ -2,7 +2,8 @@ from django.urls import path
 from .views import (
     DocumentViewSet,
     SigningTokenViewSet,
-    PublicSignViewSet
+    PublicSignViewSet,
+    SignatureVerificationViewSet
 )
 
 app_name = 'documents'
@@ -84,4 +85,17 @@ urlpatterns = [
     path('public/download/<str:token>/', PublicSignViewSet.as_view({
         'get': 'download_public'
     }), name='public-download'),
+    
+    # Verification & audit endpoints
+    path('documents/<int:doc_id>/versions/<int:version_id>/signatures/',
+         SignatureVerificationViewSet.as_view({'get': 'list_signatures'}),
+         name='signature-list'),
+    
+    path('<int:doc_id>/versions/<int:version_id>/signatures/<int:sig_id>/verify/',
+         SignatureVerificationViewSet.as_view({'get': 'verify_signature'}),
+         name='signature-verify'),
+    
+    path('<int:doc_id>/versions/<int:version_id>/audit_export/',
+         SignatureVerificationViewSet.as_view({'get': 'audit_export'}),
+         name='audit-export'),
 ]

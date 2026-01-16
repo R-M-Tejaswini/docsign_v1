@@ -10,6 +10,7 @@ import { Button } from '../components/ui/Button'
 import { Toast } from '../components/ui/Toast'
 import { useApi } from '../hooks/useApi'
 import { documentAPI } from '../services/api'
+import { AuditTrailPanel } from '../components/audit/AuditTrailPanel'
 
 export const DocumentEdit = () => {
   const { id } = useParams()
@@ -23,7 +24,7 @@ export const DocumentEdit = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
   const [toasts, setToasts] = useState([])
-  const [activeTab, setActiveTab] = useState('fields') // 'fields' or 'links'
+  const [activeTab, setActiveTab] = useState('fields') // 'fields', 'links', or 'audit'
   const [allRecipients, setAllRecipients] = useState(['Recipient 1']) // Start with default
   const [downloadingVersion, setDownloadingVersion] = useState(false)
 
@@ -376,6 +377,16 @@ export const DocumentEdit = () => {
               >
                 Links
               </button>
+              <button
+                onClick={() => setActiveTab('audit')}
+                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                  activeTab === 'audit' 
+                    ? 'bg-white text-blue-600 shadow-sm' 
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Audit 🔍 ({version?.signatures?.length || 0})
+              </button>
             </div>
 
             {/* Download Button - Add this */}
@@ -485,8 +496,12 @@ export const DocumentEdit = () => {
                   </div>
                 )}
               </div>
+            ) : activeTab === 'links' ? (
+              <LinksPanel document={documentData} version={version} />
             ) : (
-              <LinksPanel document={document} version={version} />
+              <div className="p-4 overflow-y-auto">
+                <AuditTrailPanel document={documentData} version={version} />
+              </div>
             )}
           </div>
         </div>
