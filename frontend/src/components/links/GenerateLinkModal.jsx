@@ -32,7 +32,6 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
       const data = await getRecipients()
       setAvailableRecipients(data.recipients || [])
       
-      // Pre-select first available recipient for sign links
       const available = data.recipients?.find(r => r.can_generate_sign_link)
       if (available && linkType === 'sign') {
         setSelectedRecipient(available.recipient)
@@ -82,7 +81,6 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
     if (type === 'view') {
       setSelectedRecipient('')
     } else {
-      // Auto-select first available recipient
       const available = availableRecipients.find(r => r.can_generate_sign_link)
       if (available) {
         setSelectedRecipient(available.recipient)
@@ -95,14 +93,14 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Generate Signing Link" size="md">
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-6">
         {/* Link Type Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-semibold text-gray-900 mb-3">
             Link Type
           </label>
           <div className="space-y-2">
-            <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+            <label className="flex items-start p-4 border-2 rounded-lg cursor-pointer hover:bg-blue-50 transition-colors" style={{borderColor: linkType === 'sign' ? '#3b82f6' : '#e5e7eb'}}>
               <input
                 type="radio"
                 name="linkType"
@@ -110,28 +108,28 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
                 checked={linkType === 'sign'}
                 onChange={(e) => handleLinkTypeChange(e.target.value)}
                 disabled={!canGenerateSignLinks}
-                className="text-blue-500 focus:ring-blue-500"
+                className="mt-1"
               />
               <div className="ml-3">
-                <div className="font-medium text-gray-900">Sign Link</div>
-                <div className="text-xs text-gray-500">
+                <div className="font-semibold text-gray-900">Sign Link</div>
+                <div className="text-xs text-gray-500 mt-1">
                   Single-use link for a specific recipient to sign their fields
                 </div>
               </div>
             </label>
 
-            <label className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+            <label className="flex items-start p-4 border-2 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors" style={{borderColor: linkType === 'view' ? '#3b82f6' : '#e5e7eb'}}>
               <input
                 type="radio"
                 name="linkType"
                 value="view"
                 checked={linkType === 'view'}
                 onChange={(e) => handleLinkTypeChange(e.target.value)}
-                className="text-blue-500 focus:ring-blue-500"
+                className="mt-1"
               />
               <div className="ml-3">
-                <div className="font-medium text-gray-900">View Link</div>
-                <div className="text-xs text-gray-500">
+                <div className="font-semibold text-gray-900">View Link</div>
+                <div className="text-xs text-gray-500 mt-1">
                   Unlimited-use link for viewing the document
                 </div>
               </div>
@@ -139,38 +137,38 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
           </div>
           
           {!canGenerateSignLinks && (
-            <p className="text-xs text-red-600 mt-2">
-              All recipients have already signed or have active sign links
+            <p className="text-xs text-red-600 mt-3 bg-red-50 p-2 rounded">
+              ⚠️ All recipients have already signed or have active sign links
             </p>
           )}
         </div>
 
         {/* Recipient Selection (Sign Links Only) */}
         {linkType === 'sign' && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Recipient *
+          <div className="space-y-3">
+            <label className="block text-sm font-semibold text-gray-900">
+              Select Recipient <span className="text-red-500">*</span>
             </label>
             
             {loading ? (
-              <div className="text-sm text-gray-500">Loading recipients...</div>
+              <div className="text-sm text-gray-500 text-center py-4">Loading recipients...</div>
             ) : availableRecipients.length === 0 ? (
-              <div className="text-sm text-red-600">No recipients available</div>
+              <div className="text-sm text-red-600 text-center py-4">No recipients available</div>
             ) : (
-              <div className="space-y-2">
-                {availableRecipients.map((recipientInfo) => {
+              <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                {availableRecipients.map((recipientInfo, idx) => {
                   const isAvailable = recipientInfo.can_generate_sign_link
                   const isSelected = selectedRecipient === recipientInfo.recipient
                   
                   return (
                     <label
-                      key={recipientInfo.recipient}
-                      className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer ${
+                      key={`recipient-${idx}-${recipientInfo.recipient}`}
+                      className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer transition-all ${
                         isAvailable
                           ? isSelected
-                            ? 'bg-blue-50 border-blue-500'
-                            : 'hover:bg-gray-50'
-                          : 'bg-gray-100 cursor-not-allowed opacity-60'
+                            ? 'bg-blue-50 border-blue-400 border-2'
+                            : 'hover:bg-gray-50 border-gray-200'
+                          : 'bg-gray-100 cursor-not-allowed opacity-60 border-gray-200'
                       }`}
                     >
                       <div className="flex items-center flex-1">
@@ -181,7 +179,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
                           checked={isSelected}
                           onChange={(e) => setSelectedRecipient(e.target.value)}
                           disabled={!isAvailable}
-                          className="text-blue-500 focus:ring-blue-500"
+                          className="cursor-pointer"
                         />
                         <div className="ml-3 flex-1">
                           <div className="flex items-center gap-2">
@@ -201,7 +199,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
                       </div>
                       
                       {recipientInfo.completed && (
-                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                        <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded ml-2">
                           ✓ Completed
                         </span>
                       )}
@@ -214,35 +212,35 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSucces
         )}
 
         {/* Expiry Input */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Expires In (Days)
+        <div className="space-y-3">
+          <label className="block text-sm font-semibold text-gray-900">
+            Link Expiration
           </label>
-          <input
-            type="number"
-            min="1"
-            max="365"
-            value={expiresInDays}
-            onChange={(e) => setExpiresInDays(parseInt(e.target.value) || '')}
-            placeholder="Leave empty for no expiry"
-            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Leave empty for links that never expire
-          </p>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              value={expiresInDays}
+              onChange={(e) => setExpiresInDays(e.target.value ? parseInt(e.target.value) : null)}
+              min="1"
+              max="365"
+              placeholder="Days"
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+            <span className="text-sm text-gray-600">days</span>
+            {expiresInDays && (
+              <span className="text-xs text-gray-500">
+                ({new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toLocaleDateString()})
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex gap-2 pt-4 border-t">
+        <div className="flex gap-3 pt-4 border-t">
           <Button onClick={handleClose} variant="secondary" className="flex-1">
             Cancel
           </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            className="flex-1"
-            disabled={linkType === 'sign' && !selectedRecipient}
-          >
+          <Button type="submit" variant="primary" className="flex-1">
             Generate Link
           </Button>
         </div>

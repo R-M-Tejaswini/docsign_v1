@@ -53,6 +53,10 @@ export const DocumentEdit = () => {
   const loadDocument = async () => {
     try {
       const data = await getDocument()
+      console.log('Document data:', data)
+      console.log('Latest version:', data.latest_version)
+      console.log('Fields from version:', data.latest_version?.fields)
+      
       setDocument(data)
       const latestVersion = data.latest_version
       setVersion(latestVersion)

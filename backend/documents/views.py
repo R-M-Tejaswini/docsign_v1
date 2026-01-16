@@ -7,6 +7,7 @@ from rest_framework.permissions import AllowAny
 from django.db import transaction
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
+from rest_framework.pagination import PageNumberPagination
 
 from .models import (
     Document, DocumentVersion, DocumentField,
@@ -23,9 +24,16 @@ from .serializers import (
 )
 
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 1000
+
+
 class DocumentViewSet(viewsets.ModelViewSet):
     """ViewSet for Document CRUD operations."""
     queryset = Document.objects.all()
+    pagination_class = StandardResultsSetPagination
     
     def get_parsers(self):
         """Override parsers based on request method."""
@@ -54,64 +62,35 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         
         with transaction.atomic():
-            document = serializer.save()
+            document = serializer.save()  # ← This should create ONE version via the serializer
             
-            if 'template_id' in request.data:
-                template_id = request.data['template_id']
-                try:
-                    from templates.models import Template
-                    template = Template.objects.get(id=template_id)
-                    
-                    # Create version - don't set version_number, let save() handle it
-                    version = DocumentVersion.objects.create(
-                        document=document,
-                        # Remove: version_number=1,  ← DELETE THIS LINE
-                        file=template.file,
-                        status='draft',
-                        page_count=template.page_count
-                    )
-                    
-                    # Copy template fields
-                    for template_field in template.fields.all():
-                        DocumentField.objects.create(
-                            version=version,
-                            field_type=template_field.field_type,
-                            label=template_field.label,
-                            recipient=template_field.recipient,
-                            page_number=template_field.page_number,
-                            x_pct=template_field.x_pct,
-                            y_pct=template_field.y_pct,
-                            width_pct=template_field.width_pct,
-                            height_pct=template_field.height_pct,
-                            required=template_field.required,
-                        )
-                
-                except Template.DoesNotExist:
-                    return Response(
-                        {'error': 'Template not found'},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
-            elif 'file' in request.FILES:
-                # Remove: version_number=1,  ← DELETE THIS LINE
-                version = DocumentVersion.objects.create(
-                    document=document,
-                    file=request.FILES['file'],
-                    status='draft'
-                )
-            else:
-                return Response(
-                    {'error': 'Either template_id or file is required'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Don't create another version here!
+            # The serializer's create() method handles it
     
         output_serializer = DocumentDetailSerializer(document, context={'request': request})
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['get'])
     def versions(self, request, pk=None):
-        """List all versions of a document."""
+        """List all versions of a specific document."""
         document = self.get_object()
         versions = document.versions.all()
+        serializer = DocumentVersionSerializer(
+            versions, many=True, context={'request': request}
+        )
+        return Response(serializer.data)
+    
+    @action(detail=False, methods=['get'])
+    def all_versions(self, request):
+        """List all versions across all documents."""
+        versions = DocumentVersion.objects.select_related('document').order_by('-created_at')
+        page = self.paginate_queryset(versions)
+        if page is not None:
+            serializer = DocumentVersionSerializer(
+                page, many=True, context={'request': request}
+            )
+            return self.get_paginated_response(serializer.data)
+        
         serializer = DocumentVersionSerializer(
             versions, many=True, context={'request': request}
         )
@@ -173,9 +152,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
         recipient_status = version.get_recipient_status()
         recipients = version.get_recipients()
         
-        # Build response with recipient availability
+        # Build response with recipient availability - DEDUPLICATED
         available = []
+        seen_recipients = set()
+        
         for recipient in recipients:
+            if recipient in seen_recipients:
+                continue
+            
+            seen_recipients.add(recipient)
             status_info = recipient_status.get(recipient, {})
             
             # Check if recipient can receive a sign link
@@ -252,6 +237,38 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         field.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+    
+    @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/copy')
+    def copy_version(self, request, pk=None, version_id=None):
+        """Create a new draft version by copying an existing version."""
+        document = self.get_object()
+        version = get_object_or_404(document.versions, id=version_id)
+        
+        # Create new version (version_number will auto-increment via save())
+        new_version = DocumentVersion.objects.create(
+            document=document,
+            file=version.file,
+            status='draft',
+            page_count=version.page_count
+        )
+        
+        # Copy all fields from the original version
+        for field in version.fields.all():
+            DocumentField.objects.create(
+                version=new_version,
+                field_type=field.field_type,
+                label=field.label,
+                recipient=field.recipient,
+                page_number=field.page_number,
+                x_pct=field.x_pct,
+                y_pct=field.y_pct,
+                width_pct=field.width_pct,
+                height_pct=field.height_pct,
+                required=field.required
+            )
+        
+        serializer = DocumentVersionSerializer(new_version, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class SigningTokenViewSet(viewsets.ViewSet):

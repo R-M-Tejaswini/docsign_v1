@@ -396,17 +396,26 @@ export const PublicSign = () => {
               )}
 
               {/* Signer Name Input */}
-              <div>
+              <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Your Full Name *
+                  Your Full Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   value={signerName}
                   onChange={(e) => setSignerName(e.target.value)}
-                  placeholder="Enter your full name"
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Sign here..."
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none text-center text-xl transition-colors"
+                  style={{
+                    fontFamily: "'Dancing Script', cursive",
+                    fontWeight: '700',
+                    fontSize: '24px',
+                    letterSpacing: '0.5px'
+                  }}
                 />
+                <p className="text-xs text-gray-500 text-center">
+                  (Signature will appear in handwriting style)
+                </p>
               </div>
 
               {/* Fields Summary */}

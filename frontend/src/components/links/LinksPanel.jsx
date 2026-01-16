@@ -25,7 +25,6 @@ export const LinksPanel = ({ document, version }) => {
   const loadTokens = async () => {
     try {
       const data = await listTokens()
-      // Filter tokens for this specific version
       const versionTokens = data.filter(t => t.version_id === version.id)
       setTokens(versionTokens)
     } catch (err) {
@@ -52,6 +51,18 @@ export const LinksPanel = ({ document, version }) => {
 
   const canGenerateLink = version.status !== 'draft'
 
+  const getTokenStatusBadge = (token) => {
+    if (token.revoked) {
+      return { text: 'Revoked', color: 'bg-red-100 text-red-800', icon: '✕' }
+    }
+    if (token.scope === 'sign') {
+      return token.used 
+        ? { text: 'Signed', color: 'bg-green-100 text-green-800', icon: '✓' }
+        : { text: 'Active', color: 'bg-blue-100 text-blue-800', icon: '⏱' }
+    }
+    return { text: 'View', color: 'bg-gray-100 text-gray-800', icon: '👁' }
+  }
+
   const getTokenStatusText = (token) => {
     if (token.revoked) return 'Revoked'
     if (token.scope === 'sign') {
@@ -64,196 +75,187 @@ export const LinksPanel = ({ document, version }) => {
   // Get all recipients from version
   const allRecipients = version.recipients || []
 
-  return (
-    <div className="p-6 space-y-6">
-      {/* Generate Link Button */}
-      <div>
-        <Button
-          onClick={() => setShowModal(true)}
-          variant="primary"
-          size="sm"
-          disabled={!canGenerateLink}
-          className="w-full"
-        >
-          + Generate New Link
-        </Button>
+  const formatExpiryDate = (expiresAt) => {
+    if (!expiresAt) return 'Never'
+    return new Date(expiresAt).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    })
+  }
 
-        {!canGenerateLink && (
-          <p className="text-xs text-red-600 mt-2">
-            Lock document first to generate links
-          </p>
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex justify-between items-center pb-4 border-b">
+        <h3 className="text-lg font-semibold text-gray-900">Signing Links</h3>
+        {canGenerateLink && (
+          <Button
+            onClick={() => setShowModal(true)}
+            variant="primary"
+            size="sm"
+          >
+            + Generate Link
+          </Button>
         )}
       </div>
 
-      {/* Links List Section */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">All Links ({tokens.length})</h3>
+      {!canGenerateLink && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+          <p className="text-sm text-yellow-800">
+            📋 Lock the document first to generate signing links
+          </p>
+        </div>
+      )}
 
-        {loading ? (
-          <div className="text-center py-8 text-gray-500">Loading links...</div>
-        ) : tokens.length === 0 ? (
-          <div className="text-center py-8 text-gray-500 text-sm">
-            No links generated yet
-          </div>
-        ) : (
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {tokens.map((token) => (
-              <div key={token.id} className="border rounded-lg overflow-hidden">
-                {/* Token Header */}
-                <div
-                  onClick={() =>
-                    setExpandedTokenId(expandedTokenId === token.id ? null : token.id)
-                  }
-                  className="p-3 bg-gray-50 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span
-                        className={`text-xs px-2 py-1 rounded font-medium ${
-                          token.revoked
-                            ? 'bg-red-100 text-red-800'
-                            : token.scope === 'sign' && token.used
-                            ? 'bg-green-100 text-green-800'
-                            : token.scope === 'sign'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}
-                      >
-                        {getTokenStatusText(token)}
+      {loading && (
+        <div className="text-center py-8 text-gray-500">Loading links...</div>
+      )}
+
+      {tokens.length === 0 && !loading && (
+        <div className="text-center py-8 text-gray-500">
+          No links created yet
+        </div>
+      )}
+
+      {/* Token List */}
+      <div className="space-y-3">
+        {tokens.map((token) => {
+          const badge = getTokenStatusBadge(token)
+          return (
+            <div key={token.id} className="border rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+              {/* Token Header */}
+              <div
+                onClick={() =>
+                  setExpandedTokenId(expandedTokenId === token.id ? null : token.id)
+                }
+                className="p-4 bg-gradient-to-r from-gray-50 to-gray-100 hover:from-gray-100 hover:to-gray-150 cursor-pointer flex justify-between items-center transition-colors"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className={`text-xs px-3 py-1 rounded-full font-semibold inline-flex items-center gap-1 ${badge.color}`}>
+                      <span>{badge.icon}</span>
+                      {badge.text}
+                    </span>
+                    
+                    {token.recipient && (
+                      <span className={getRecipientBadgeClasses(token.recipient, allRecipients)}>
+                        {token.recipient}
                       </span>
-                      
-                      {/* Show recipient badge for sign tokens */}
-                      {token.recipient && (
-                        <span className={getRecipientBadgeClasses(token.recipient, allRecipients)}>
-                          {token.recipient}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Created: {new Date(token.created_at).toLocaleDateString()}
-                    </div>
-                    {token.expires_at && (
-                      <div className="text-xs text-gray-500">
-                        Expires: {new Date(token.expires_at).toLocaleDateString()}
-                      </div>
-                    )}
-                    {/* Show recipient status for sign tokens */}
-                    {token.recipient_status && (
-                      <div className="text-xs mt-1">
-                        <span className={`${
-                          token.recipient_status.completed 
-                            ? 'text-green-600' 
-                            : 'text-yellow-600'
-                        }`}>
-                          {token.recipient_status.signed}/{token.recipient_status.total} fields
-                          {token.recipient_status.completed && ' ✓'}
-                        </span>
-                      </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`text-xs px-2 py-1 rounded ${
-                        token.revoked
-                          ? 'bg-red-100 text-red-800'
-                          : token.used
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}
-                    >
-                      {token.revoked ? 'Revoked' : token.used ? 'Used' : 'Active'}
-                    </span>
-                    <span className="text-gray-400">
-                      {expandedTokenId === token.id ? '▼' : '▶'}
-                    </span>
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <div>Created: {new Date(token.created_at).toLocaleDateString()}</div>
+                    {token.expires_at && (
+                      <div>Expires: {formatExpiryDate(token.expires_at)}</div>
+                    )}
+                  </div>
+                  
+                  {/* Recipient Status for Sign Tokens */}
+                  {token.recipient_status && (
+                    <div className="text-xs mt-2">
+                      <span className={`inline-flex items-center gap-1 ${
+                        token.recipient_status.completed 
+                          ? 'text-green-600' 
+                          : 'text-yellow-600'
+                      }`}>
+                        {token.recipient_status.signed}/{token.recipient_status.total} fields
+                        {token.recipient_status.completed && ' ✓'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <div className="text-gray-400 ml-4">
+                  {expandedTokenId === token.id ? '▼' : '▶'}
+                </div>
+              </div>
+
+              {/* Token Details - Expandable */}
+              {expandedTokenId === token.id && (
+                <div className="p-4 bg-white border-t space-y-4">
+                  {/* Link Info */}
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 uppercase mb-2 block">
+                      Signing Link
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={token.public_url}
+                        className="flex-1 px-3 py-2 text-xs bg-gray-50 border border-gray-300 rounded font-mono"
+                      />
+                      <Button
+                        onClick={() => copy(token.public_url)}
+                        variant="secondary"
+                        size="sm"
+                        className="flex items-center gap-2"
+                      >
+                        {copied ? '✓ Copied' : '📋 Copy'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Signature Events */}
+                  {token.signatures && token.signatures.length > 0 && (
+                    <div className="border-t pt-4">
+                      <label className="text-xs font-semibold text-gray-600 uppercase mb-2 block">
+                        Signature Events ({token.signatures.length})
+                      </label>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {token.signatures.map((sig, idx) => (
+                          <div key={idx} className="text-xs p-3 bg-green-50 rounded border border-green-200">
+                            <div className="flex items-center justify-between mb-1">
+                              {sig.recipient && (
+                                <span className={getRecipientBadgeClasses(sig.recipient, allRecipients)}>
+                                  {sig.recipient}
+                                </span>
+                              )}
+                              <span className="text-green-600 font-semibold">✓ Signed</span>
+                            </div>
+                            <div className="font-medium text-gray-900 mt-1">
+                              {sig.signer_name_display}
+                            </div>
+                            <div className="text-gray-500 mt-1">
+                              {new Date(sig.signed_at).toLocaleString()}
+                            </div>
+                            {sig.ip_address && (
+                              <div className="text-gray-400 text-[10px] mt-1">
+                                IP: {sig.ip_address}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-2 pt-2 border-t">
+                    {!token.revoked && (
+                      <Button
+                        onClick={() => handleRevoke(token.token)}
+                        variant="danger"
+                        size="sm"
+                        className="flex-1"
+                      >
+                        🔗 Revoke Link
+                      </Button>
+                    )}
+                    {token.revoked && (
+                      <div className="flex-1 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 text-center font-medium">
+                        This link has been revoked
+                      </div>
+                    )}
                   </div>
                 </div>
-
-                {/* Token Details - Expandable */}
-                {expandedTokenId === token.id && (
-                  <div className="p-4 bg-white border-t space-y-3">
-                    {/* Link Info */}
-                    <div>
-                      <label className="text-xs font-semibold text-gray-600 uppercase">
-                        Link
-                      </label>
-                      <div className="flex gap-2 mt-1">
-                        <input
-                          type="text"
-                          readOnly
-                          value={token.public_url}
-                          className="flex-1 px-2 py-1 text-xs bg-gray-50 border rounded"
-                        />
-                        <Button
-                          onClick={() => copy(token.public_url)}
-                          variant="secondary"
-                          size="sm"
-                        >
-                          {copied ? 'Copied!' : 'Copy'}
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Signature Events */}
-                    {token.signatures && token.signatures.length > 0 && (
-                      <div>
-                        <label className="text-xs font-semibold text-gray-600 uppercase">
-                          Signature Events ({token.signatures.length})
-                        </label>
-                        <div className="mt-2 space-y-2 max-h-40 overflow-y-auto">
-                          {token.signatures.map((sig, idx) => (
-                            <div key={idx} className="text-xs p-2 bg-gray-50 rounded border">
-                              <div className="flex items-center justify-between mb-1">
-                                {sig.recipient && (
-                                  <span className={getRecipientBadgeClasses(sig.recipient, allRecipients)}>
-                                    {sig.recipient}
-                                  </span>
-                                )}
-                                <span className="text-green-600">✓ Signed</span>
-                              </div>
-                              <div className="font-medium text-gray-900">
-                                {sig.signer_name_display}
-                              </div>
-                              <div className="text-gray-500 mt-1">
-                                {new Date(sig.signed_at).toLocaleString()}
-                              </div>
-                              {sig.ip_address && (
-                                <div className="text-gray-400 text-[10px] mt-1">
-                                  IP: {sig.ip_address}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="flex gap-2 pt-2 border-t">
-                      {!token.revoked && (
-                        <Button
-                          onClick={() => handleRevoke(token.token)}
-                          variant="danger"
-                          size="sm"
-                          className="flex-1"
-                        >
-                          Revoke
-                        </Button>
-                      )}
-                      {token.revoked && (
-                        <div className="flex-1 px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700 text-center">
-                          This link has been revoked
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+              )}
+            </div>
+          )
+        })}
       </div>
 
+      {/* Generate Link Modal */}
       <GenerateLinkModal
         isOpen={showModal}
         onClose={() => setShowModal(false)}

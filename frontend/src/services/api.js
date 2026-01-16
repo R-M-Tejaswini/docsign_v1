@@ -60,10 +60,15 @@ export const documentAPI = {
   get: (id) => api.get(`/documents/${id}/`),
   
   // Document versions
-  getVersions: (docId) => api.get(`/documents/${docId}/versions/`),
+  getVersions: (docId) => docId 
+    ? api.get(`/documents/${docId}/versions/`)
+    : api.get(`/documents/versions/`),  // ← This should hit the paginated endpoint
   
   getVersion: (docId, versionId) =>
     api.get(`/documents/${docId}/versions/${versionId}/`),
+  
+  copyVersion: (docId, versionId) =>
+    api.post(`/documents/${docId}/versions/${versionId}/copy/`),
   
   lockVersion: (docId, versionId) =>
     api.post(`/documents/${docId}/versions/${versionId}/lock/`),

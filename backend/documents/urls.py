@@ -20,7 +20,12 @@ urlpatterns = [
         'delete': 'destroy'
     }), name='document-detail'),
     
-    # Document versions
+    # Document versions - ALL versions (must come before specific document routes)
+    path('versions/', DocumentViewSet.as_view({
+        'get': 'all_versions'
+    }), name='all-document-versions'),
+    
+    # Document versions for specific document
     path('<int:pk>/versions/', DocumentViewSet.as_view({
         'get': 'versions'
     }), name='document-versions'),
@@ -65,4 +70,8 @@ urlpatterns = [
         'get': 'get_sign_page',
         'post': 'submit_signature'
     }), name='public-sign'),
+    
+    path('<int:pk>/versions/<int:version_id>/copy/', DocumentViewSet.as_view({
+        'post': 'copy_version'
+    }), name='document-version-copy'),
 ]
