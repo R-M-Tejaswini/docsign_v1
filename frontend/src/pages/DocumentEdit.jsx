@@ -15,7 +15,7 @@ import { AuditTrailPanel } from '../components/audit/AuditTrailPanel'
 export const DocumentEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [documentData, setDocumentData] = useState(null) // ← renamed from 'document'
+  const [documentData, setDocumentData] = useState(null)
   const [documentTitle, setDocumentTitle] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [version, setVersion] = useState(null)
@@ -24,8 +24,8 @@ export const DocumentEdit = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
   const [toasts, setToasts] = useState([])
-  const [activeTab, setActiveTab] = useState('fields') // 'fields', 'links', or 'audit'
-  const [allRecipients, setAllRecipients] = useState(['Recipient 1']) // Start with default
+  const [activeTab, setActiveTab] = useState('fields')
+  const [allRecipients, setAllRecipients] = useState(['Recipient 1'])
   const [downloadingVersion, setDownloadingVersion] = useState(false)
 
   const { execute: getDocument } = useApi(() => documentAPI.get(id))
@@ -47,10 +47,10 @@ export const DocumentEdit = () => {
   )
 
   const addToast = (message, type = 'info') => {
-    const id = Date.now()
-    setToasts([...toasts, { id, message, type, duration: 3000 }])
+    const toastId = Date.now()
+    setToasts([...toasts, { id: toastId, message, type, duration: 3000 }])
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
+      setToasts((prev) => prev.filter((t) => t.id !== toastId))
     }, 3000)
   }
 
@@ -61,13 +61,12 @@ export const DocumentEdit = () => {
   const loadDocument = async () => {
     try {
       const data = await getDocument()
-      setDocumentData(data) // ← updated
+      setDocumentData(data)
       setDocumentTitle(data.title)
       const latestVersion = data.latest_version
       setVersion(latestVersion)
       setFields(latestVersion?.fields || [])
       
-      // Extract all unique recipients from fields
       const recipients = [...new Set(latestVersion?.fields?.map(f => f.recipient).filter(Boolean))]
       if (recipients.length > 0) {
         setAllRecipients(recipients.sort())
@@ -85,12 +84,12 @@ export const DocumentEdit = () => {
 
     try {
       await updateDocument({ title: documentTitle })
-      setDocumentData({ ...documentData, title: documentTitle }) // ← updated
+      setDocumentData({ ...documentData, title: documentTitle })
       setIsEditingTitle(false)
       addToast('Document name updated', 'success')
     } catch (err) {
       addToast('Failed to update document name', 'error')
-      setDocumentTitle(document.title) // Revert on error
+      setDocumentTitle(documentData.title)
     }
   }
 
@@ -99,7 +98,6 @@ export const DocumentEdit = () => {
       return
     }
 
-    // Validate all fields have recipients
     const fieldsWithoutRecipient = fields.filter(f => !f.recipient || !f.recipient.trim())
     if (fieldsWithoutRecipient.length > 0) {
       addToast(
@@ -113,7 +111,7 @@ export const DocumentEdit = () => {
       const updatedVersion = await lockVersion()
       setVersion(updatedVersion)
       addToast('Version locked successfully', 'success')
-      setActiveTab('links') // Switch to links tab
+      setActiveTab('links')
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to lock version'
       addToast(errorMsg, 'error')
@@ -140,7 +138,6 @@ export const DocumentEdit = () => {
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
 
-    // Determine default recipient
     const defaultRecipient = allRecipients[0] || 'Recipient 1'
 
     try {
@@ -182,13 +179,12 @@ export const DocumentEdit = () => {
             height_pct: updatedField.height_pct,
           }
         : {
-            value: updatedField.value, // Only value in locked mode
+            value: updatedField.value,
           }
 
       await updateField(updatedField.id, updateData)
       setFields(fields.map((f) => (f.id === updatedField.id ? updatedField : f)))
       
-      // Update recipients list if new recipient added
       if (updatedField.recipient && !allRecipients.includes(updatedField.recipient)) {
         setAllRecipients([...allRecipients, updatedField.recipient].sort())
       }
@@ -213,7 +209,6 @@ export const DocumentEdit = () => {
       setFields(updatedFields)
       setSelectedFieldId(null)
       
-      // Update recipients list
       const recipients = [...new Set(updatedFields.map(f => f.recipient).filter(Boolean))]
       setAllRecipients(recipients.sort())
       
@@ -229,7 +224,7 @@ export const DocumentEdit = () => {
       const blob = await downloadVersion()
       
       const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')  // ← now safe to use
+      const link = document.createElement('a')
       link.href = url
       link.download = `${documentData.title}_v${version.version_number}_signed.pdf`
       document.body.appendChild(link)
@@ -246,17 +241,21 @@ export const DocumentEdit = () => {
   }
 
   const canUpdateFieldValue = (field) => {
-    // In locked mode, can only update value if field is not locked
     return !field.locked
   }
 
   if (!documentData || !version) {
-    return <div className="p-8 text-center">Loading document...</div>
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading document...</p>
+        </div>
+      </div>
+    )
   }
 
   const fileUrl = version?.file_url || version?.file
-
-  // Build absolute URL
   let absoluteFileUrl = fileUrl
   if (fileUrl && !fileUrl.startsWith('http')) {
     absoluteFileUrl = `http://localhost:8000${fileUrl}`
@@ -265,8 +264,6 @@ export const DocumentEdit = () => {
   const pageFields = fields.filter((f) => f.page_number === currentPage)
   const isDraftMode = version.status === 'draft'
   const selectedField = fields.find(f => f.id === selectedFieldId)
-
-  // Get recipient statistics
   const recipientStats = version.recipient_status || {}
 
   return (
@@ -278,137 +275,163 @@ export const DocumentEdit = () => {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className="bg-white border-b px-6 py-4 flex justify-between items-center">
-          <div>
-            {isEditingTitle ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={documentTitle}
-                  onChange={(e) => setDocumentTitle(e.target.value)}
-                  onBlur={handleSaveTitle}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveTitle()
-                    if (e.key === 'Escape') {
-                      setDocumentTitle(document.title)
-                      setIsEditingTitle(false)
-                    }
-                  }}
-                  autoFocus
-                  className="text-2xl font-bold px-2 py-1 border border-blue-500 rounded"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <h1 
-                  className={`text-2xl font-bold ${
-                    isDraftMode 
-                      ? 'cursor-pointer hover:text-blue-600' 
-                      : 'cursor-default'
-                  }`}
-                  onClick={() => isDraftMode && setIsEditingTitle(true)}
-                >
-                  {documentData?.title}
-                </h1>
-                {isDraftMode && (
-                  <span className="text-xs text-gray-500 ml-2">Click to edit</span>
-                )}
-              </div>
-            )}
-
-            <div className="flex items-center gap-4 mt-1">
-              <p className="text-sm text-gray-600">
-                Status: <span className={`font-medium capitalize ${
-                  version?.status === 'draft' ? 'text-blue-600' :
-                  version?.status === 'completed' ? 'text-green-600' :
-                  'text-yellow-600'
-                }`}>{version?.status}</span>
-                {isDraftMode && <span className="text-blue-600 ml-2">(Editable)</span>}
-              </p>
-              
-              {/* Recipient badges */}
-              {allRecipients.length > 0 && (
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-gray-500">Recipients:</span>
-                  {allRecipients.map(recipient => {
-                    const recipientFields = fields.filter(f => f.recipient === recipient)
-                    const stats = recipientStats[recipient]
-                    return (
-                      <span 
-                        key={recipient} 
-                        className={`px-2 py-1 rounded text-xs font-medium ${
-                          stats?.completed ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
-                        }`}
-                      >
-                        {recipient} ({stats?.signed || 0}/{stats?.total || recipientFields.length})
-                      </span>
-                    )
-                  })}
+        {/* Enhanced Header */}
+        <div className="bg-white border-b-2 border-gray-200 px-6 py-4 shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <div className="flex-1">
+              {isEditingTitle ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={documentTitle}
+                    onChange={(e) => setDocumentTitle(e.target.value)}
+                    onBlur={handleSaveTitle}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveTitle()
+                      if (e.key === 'Escape') {
+                        setDocumentTitle(documentData.title)
+                        setIsEditingTitle(false)
+                      }
+                    }}
+                    autoFocus
+                    className="text-2xl font-bold px-3 py-2 border-2 border-blue-500 rounded-lg focus:ring-2 focus:ring-blue-300"
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <h1 
+                    className={`text-3xl font-bold ${
+                      isDraftMode 
+                        ? 'cursor-pointer hover:text-blue-600 transition-colors' 
+                        : 'cursor-default'
+                    }`}
+                    onClick={() => isDraftMode && setIsEditingTitle(true)}
+                  >
+                    {documentData?.title}
+                  </h1>
+                  {isDraftMode && (
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">✏️ Click to edit</span>
+                  )}
                 </div>
               )}
             </div>
-            {addingFieldType && (
-              <p className="text-sm text-blue-600 mt-1">
-                Click on the PDF to add a {addingFieldType} field
-              </p>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              {version?.status === 'completed' && (
+                <Button 
+                  onClick={handleDownloadVersion} 
+                  variant="success" 
+                  size="sm"
+                  disabled={downloadingVersion}
+                >
+                  {downloadingVersion ? (
+                    <>
+                      <span className="animate-spin">⟳</span>
+                      Downloading...
+                    </>
+                  ) : (
+                    <>
+                      <span>⬇️</span>
+                      Download PDF
+                    </>
+                  )}
+                </Button>
+              )}
+
+              {isDraftMode && (
+                <Button onClick={handleLockVersion} variant="warning" size="sm">
+                  <span>🔒</span>
+                  Lock Version
+                </Button>
+              )}
+              <Button onClick={() => navigate('/documents')} variant="secondary" size="sm">
+                <span>←</span>
+                Back
+              </Button>
+            </div>
+          </div>
+
+          {/* Status and Recipients */}
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600 font-semibold">Status:</span>
+              <span className={`font-bold capitalize px-3 py-1 rounded-full text-sm ${
+                version?.status === 'draft' ? 'bg-blue-100 text-blue-800' :
+                version?.status === 'completed' ? 'bg-green-100 text-green-800' :
+                'bg-yellow-100 text-yellow-800'
+              }`}>
+                {version?.status}
+              </span>
+              {isDraftMode && <span className="text-blue-600 text-sm font-semibold">(Editable)</span>}
+            </div>
+            
+            {allRecipients.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-gray-600 font-semibold">Recipients:</span>
+                {allRecipients.map(recipient => {
+                  const recipientFields = fields.filter(f => f.recipient === recipient)
+                  const stats = recipientStats[recipient]
+                  return (
+                    <span 
+                      key={recipient} 
+                      className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm ${
+                        stats?.completed ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'
+                      }`}
+                    >
+                      {recipient} ({stats?.signed || 0}/{stats?.total || recipientFields.length})
+                      {stats?.completed && ' ✓'}
+                    </span>
+                  )
+                })}
+              </div>
             )}
           </div>
-          <div className="flex gap-2">
-            {/* Tab Switcher */}
-            <div className="flex bg-gray-100 rounded-lg p-1 mr-4">
-              <button
-                onClick={() => setActiveTab('fields')}
-                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                  activeTab === 'fields' 
-                    ? 'bg-white text-blue-600 shadow-sm' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Fields ({fields.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('links')}
-                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                  activeTab === 'links' 
-                    ? 'bg-white text-blue-600 shadow-sm' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Links
-              </button>
-              <button
-                onClick={() => setActiveTab('audit')}
-                className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-                  activeTab === 'audit' 
-                    ? 'bg-white text-blue-600 shadow-sm' 
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Audit 🔍 ({version?.signatures?.length || 0})
-              </button>
+
+          {addingFieldType && (
+            <div className="mt-3 p-3 bg-blue-50 border-2 border-blue-300 rounded-lg">
+              <p className="text-sm text-blue-900 font-semibold flex items-center gap-2">
+                <span>👆</span>
+                Click on the PDF to add a {addingFieldType} field
+              </p>
             </div>
+          )}
 
-            {/* Download Button - Add this */}
-            {version?.status === 'completed' && (
-              <Button 
-                onClick={handleDownloadVersion} 
-                variant="secondary" 
-                size="sm"
-                disabled={downloadingVersion}
-              >
-                {downloadingVersion ? '⬇️ Downloading...' : '⬇️ Download PDF'}
-              </Button>
-            )}
-
-            {isDraftMode && (
-              <Button onClick={handleLockVersion} variant="warning" size="sm">
-                🔒 Lock Version
-              </Button>
-            )}
-            <Button onClick={() => navigate('/documents')} variant="secondary" size="sm">
-              ← Back
-            </Button>
+          {/* Enhanced Tab Switcher */}
+          <div className="flex gap-2 mt-4">
+            <button
+              onClick={() => setActiveTab('fields')}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'fields' 
+                  ? 'bg-blue-600 text-white shadow-md' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <span className="mr-2">📋</span>
+              Fields ({fields.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('links')}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'links' 
+                  ? 'bg-blue-600 text-white shadow-md' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <span className="mr-2">🔗</span>
+              Links
+            </button>
+            <button
+              onClick={() => setActiveTab('audit')}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                activeTab === 'audit' 
+                  ? 'bg-blue-600 text-white shadow-md' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <span className="mr-2">🔍</span>
+              Audit ({version?.signatures?.length || 0})
+            </button>
           </div>
         </div>
 
@@ -433,7 +456,6 @@ export const DocumentEdit = () => {
                   onFieldSelect={setSelectedFieldId}
                   scale={scale}
                 >
-                  {/* Draggable field overlays in draft mode */}
                   {isDraftMode && pageFields.map((field) => (
                     <FieldOverlay
                       key={field.id}
@@ -452,10 +474,10 @@ export const DocumentEdit = () => {
             </DocumentViewer>
           </div>
 
-          {/* Right Sidebar - Field Editor or Links Panel */}
-          <div className="w-80 bg-white border-l overflow-y-auto">
+          {/* Right Sidebar - FIXED: Added proper height management */}
+          <div className="w-96 bg-white border-l-2 border-gray-200 flex flex-col overflow-hidden shadow-lg">
             {activeTab === 'fields' ? (
-              <div className="p-4">
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 <FieldEditor
                   field={selectedField}
                   onUpdate={handleUpdateField}
@@ -464,29 +486,30 @@ export const DocumentEdit = () => {
                   canEdit={isDraftMode}
                 />
 
-                {/* Recipient Summary */}
+                {/* Enhanced Recipient Summary */}
                 {allRecipients.length > 0 && (
-                  <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                    <h4 className="text-sm font-semibold text-gray-700 mb-3">
+                  <div className="p-4 bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl border-2 border-gray-200">
+                    <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+                      <span>👥</span>
                       Recipients Summary
                     </h4>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       {allRecipients.map(recipient => {
                         const recipientFields = fields.filter(f => f.recipient === recipient)
                         const stats = recipientStats[recipient]
                         
                         return (
-                          <div key={recipient} className="text-xs">
-                            <div className="flex justify-between items-center">
-                              <span className="font-medium">{recipient}</span>
-                              <span className="text-gray-500">
+                          <div key={recipient} className="bg-white p-3 rounded-lg border border-gray-200">
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="font-bold text-gray-900">{recipient}</span>
+                              <span className="text-xs text-gray-600 font-semibold">
                                 {recipientFields.length} fields
                               </span>
                             </div>
                             {stats && (
-                              <div className="text-gray-500 mt-1">
-                                {stats.signed}/{stats.total} signed
-                                {stats.completed && <span className="text-green-600 ml-2">✓</span>}
+                              <div className="text-xs text-gray-600 flex items-center justify-between">
+                                <span>{stats.signed}/{stats.total} signed</span>
+                                {stats.completed && <span className="text-green-600 font-bold">✓ Complete</span>}
                               </div>
                             )}
                           </div>
@@ -499,7 +522,7 @@ export const DocumentEdit = () => {
             ) : activeTab === 'links' ? (
               <LinksPanel document={documentData} version={version} />
             ) : (
-              <div className="p-4 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto p-4">
                 <AuditTrailPanel document={documentData} version={version} />
               </div>
             )}

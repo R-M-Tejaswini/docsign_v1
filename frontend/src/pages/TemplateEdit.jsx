@@ -21,7 +21,7 @@ export const TemplateEdit = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
   const [toasts, setToasts] = useState([])
-  const [allRecipients, setAllRecipients] = useState(['Recipient 1']) // Start with default
+  const [allRecipients, setAllRecipients] = useState(['Recipient 1'])
 
   const { execute: getTemplate } = useApi(() => templateAPI.get(id))
   const { execute: createField } = useApi((data) => templateAPI.createField(id, data))
@@ -48,7 +48,6 @@ export const TemplateEdit = () => {
       setTemplateTitle(data.title)
       setFields(data.fields || [])
       
-      // Extract all unique recipients from fields
       const recipients = [...new Set(data.fields?.map(f => f.recipient).filter(Boolean))]
       if (recipients.length > 0) {
         setAllRecipients(recipients.sort())
@@ -71,7 +70,7 @@ export const TemplateEdit = () => {
       addToast('Template name updated', 'success')
     } catch (err) {
       addToast('Failed to update template name', 'error')
-      setTemplateTitle(template.title) // Revert on error
+      setTemplateTitle(template.title)
     }
   }
 
@@ -91,7 +90,6 @@ export const TemplateEdit = () => {
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
 
-    // Determine default recipient
     const defaultRecipient = allRecipients[0] || 'Recipient 1'
 
     try {
@@ -128,7 +126,6 @@ export const TemplateEdit = () => {
       })
       setFields(fields.map((f) => (f.id === updatedField.id ? updatedField : f)))
       
-      // Update recipients list if new recipient added
       if (updatedField.recipient && !allRecipients.includes(updatedField.recipient)) {
         setAllRecipients([...allRecipients, updatedField.recipient].sort())
       }
@@ -148,7 +145,6 @@ export const TemplateEdit = () => {
       setFields(updatedFields)
       setSelectedFieldId(null)
       
-      // Update recipients list
       const recipients = [...new Set(updatedFields.map(f => f.recipient).filter(Boolean))]
       setAllRecipients(recipients.sort())
       
@@ -159,16 +155,22 @@ export const TemplateEdit = () => {
   }
 
   if (!template) {
-    return <div className="p-8 text-center">Loading template...</div>
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
+          <p className="text-gray-600 font-medium">Loading template...</p>
+        </div>
+      </div>
+    )
   }
 
   const fileUrl = template.file_url || template.file
-
-  // Build absolute URL
-let absoluteFileUrl = fileUrl
-if (fileUrl && !fileUrl.startsWith('http')) {
-  absoluteFileUrl = `http://localhost:8000${fileUrl}`
-}
+  let absoluteFileUrl = fileUrl
+  if (fileUrl && !fileUrl.startsWith('http')) {
+    absoluteFileUrl = `http://localhost:8000${fileUrl}`
+  }
+  
   const pageFields = fields.filter((f) => f.page_number === currentPage)
   const selectedField = fields.find(f => f.id === selectedFieldId)
 
@@ -177,65 +179,74 @@ if (fileUrl && !fileUrl.startsWith('http')) {
       <FieldPalette onSelectFieldType={handleAddField} />
 
       <div className="flex-1 flex flex-col">
-        <div className="bg-white border-b px-6 py-4 flex justify-between items-center">
-          <div>
-            {isEditingTitle ? (
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={templateTitle}
-                  onChange={(e) => setTemplateTitle(e.target.value)}
-                  onBlur={handleSaveTitle}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveTitle()
-                    if (e.key === 'Escape') {
-                      setTemplateTitle(template.title)
-                      setIsEditingTitle(false)
-                    }
-                  }}
-                  autoFocus
-                  className="text-2xl font-bold px-2 py-1 border border-blue-500 rounded"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <h1 
-                  className="text-2xl font-bold cursor-pointer hover:text-blue-600"
-                  onClick={() => setIsEditingTitle(true)}
-                >
-                  {template?.title}
-                </h1>
-                <span className="text-xs text-gray-500 ml-2">Click to edit</span>
-              </div>
-            )}
+        {/* Enhanced Header */}
+        <div className="bg-white border-b-2 border-gray-200 px-6 py-4 shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <div className="flex-1">
+              {isEditingTitle ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={templateTitle}
+                    onChange={(e) => setTemplateTitle(e.target.value)}
+                    onBlur={handleSaveTitle}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveTitle()
+                      if (e.key === 'Escape') {
+                        setTemplateTitle(template.title)
+                        setIsEditingTitle(false)
+                      }
+                    }}
+                    autoFocus
+                    className="text-2xl font-bold px-3 py-2 border-2 border-blue-500 rounded-lg focus:ring-2 focus:ring-blue-300"
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <h1 
+                    className="text-3xl font-bold cursor-pointer hover:text-blue-600 transition-colors"
+                    onClick={() => setIsEditingTitle(true)}
+                  >
+                    {template?.title}
+                  </h1>
+                  <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">✏️ Click to edit</span>
+                </div>
+              )}
+            </div>
 
-            {addingFieldType && (
-              <p className="text-sm text-blue-600 mt-1">
+            <Button onClick={() => navigate('/templates')} variant="secondary" size="sm">
+              <span>←</span>
+              Back to Templates
+            </Button>
+          </div>
+
+          {addingFieldType && (
+            <div className="mb-3 p-3 bg-blue-50 border-2 border-blue-300 rounded-lg">
+              <p className="text-sm text-blue-900 font-semibold flex items-center gap-2">
+                <span>👆</span>
                 Click on the PDF to add a {addingFieldType} field
               </p>
-            )}
-            
-            {/* Recipient badges */}
-            {allRecipients.length > 0 && (
-              <div className="flex items-center gap-2 mt-2">
-                <span className="text-xs text-gray-500">Recipients:</span>
-                {allRecipients.map(recipient => {
-                  const recipientFields = fields.filter(f => f.recipient === recipient)
-                  return (
-                    <span key={recipient} className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded">
-                      {recipient} ({recipientFields.length})
-                    </span>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          <Button onClick={() => navigate('/templates')} variant="secondary">
-            ← Back
-          </Button>
+            </div>
+          )}
+          
+          {/* Recipient badges */}
+          {allRecipients.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-gray-600 font-semibold">Recipients:</span>
+              {allRecipients.map(recipient => {
+                const recipientFields = fields.filter(f => f.recipient === recipient)
+                return (
+                  <span key={recipient} className="text-xs px-3 py-1 bg-blue-100 text-blue-800 rounded-full font-bold shadow-sm">
+                    {recipient} ({recipientFields.length})
+                  </span>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         <div className="flex-1 flex overflow-hidden">
+          {/* PDF Viewer */}
           <div 
             className="flex-1 relative"
             onClick={addingFieldType ? handlePdfClick : undefined}
@@ -273,7 +284,8 @@ if (fileUrl && !fileUrl.startsWith('http')) {
             </DocumentViewer>
           </div>
 
-          <div className="w-80 bg-white border-l p-4 overflow-y-auto">
+          {/* Right Sidebar */}
+          <div className="w-96 bg-white border-l-2 border-gray-200 overflow-y-auto p-4 space-y-4 shadow-lg">
             <FieldEditor
               field={selectedField}
               onUpdate={handleUpdateField}
@@ -282,26 +294,27 @@ if (fileUrl && !fileUrl.startsWith('http')) {
               canEdit={true}
             />
 
-            {/* Recipient Summary */}
+            {/* Enhanced Recipient Summary */}
             {allRecipients.length > 0 && (
-              <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">
+              <div className="p-4 bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl border-2 border-gray-200">
+                <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2">
+                  <span>👥</span>
                   Recipients Summary
                 </h4>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {allRecipients.map(recipient => {
                     const recipientFields = fields.filter(f => f.recipient === recipient)
                     const requiredCount = recipientFields.filter(f => f.required).length
                     
                     return (
-                      <div key={recipient} className="text-xs">
-                        <div className="flex justify-between items-center">
-                          <span className="font-medium">{recipient}</span>
-                          <span className="text-gray-500">
+                      <div key={recipient} className="bg-white p-3 rounded-lg border border-gray-200">
+                        <div className="flex justify-between items-center mb-2">
+                          <span className="font-bold text-gray-900">{recipient}</span>
+                          <span className="text-xs text-gray-600 font-semibold">
                             {recipientFields.length} fields
                           </span>
                         </div>
-                        <div className="text-gray-500 mt-1">
+                        <div className="text-xs text-gray-600">
                           {requiredCount} required
                         </div>
                       </div>

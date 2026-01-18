@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
 import { DocumentsList } from './pages/DocumentsList'
@@ -6,7 +5,7 @@ import { DocumentEdit } from './pages/DocumentEdit'
 import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
-import { WebhooksPage } from './pages/WebhooksPage'  // ✅ ADD
+import { WebhooksPage } from './pages/WebhooksPage'
 
 function Navigation() {
   const location = useLocation()
@@ -16,32 +15,48 @@ function Navigation() {
     return null
   }
 
+  const navLinks = [
+    { to: '/templates', label: 'Templates', icon: '📋' },
+    { to: '/documents', label: 'Documents', icon: '📄' },
+    { to: '/webhooks', label: 'Webhooks', icon: '🪝' },
+  ]
+
+  const isActive = (path) => location.pathname.startsWith(path)
+
   return (
-    <nav className="bg-white shadow-sm">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div className="flex justify-between items-center">
-          <Link to="/" className="text-2xl font-bold text-blue-600">
-            DocSign
+    <nav className="bg-white shadow-md border-b border-gray-200 sticky top-0 z-40">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center h-16">
+          {/* Logo */}
+          <Link 
+            to="/" 
+            className="flex items-center gap-3 group transition-all"
+          >
+            <div className="text-3xl group-hover:scale-110 transition-transform">📝</div>
+            <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+              DocSign
+            </span>
           </Link>
-          <div className="flex gap-4">
-            <Link
-              to="/templates"
-              className="text-gray-600 hover:text-gray-900 font-medium transition-colors"
-            >
-              Templates
-            </Link>
-            <Link
-              to="/documents"
-              className="text-gray-600 hover:text-gray-900 font-medium transition-colors"
-            >
-              Documents
-            </Link>
-            <Link
-              to="/webhooks"  // ✅ ADD
-              className="text-gray-600 hover:text-gray-900 font-medium transition-colors"
-            >
-              🪝 Webhooks
-            </Link>
+
+          {/* Navigation Links */}
+          <div className="flex gap-2">
+            {navLinks.map((link) => (
+              <Link
+                key={link.to}
+                to={link.to}
+                className={`
+                  px-4 py-2 rounded-lg font-semibold transition-all duration-200
+                  flex items-center gap-2
+                  ${isActive(link.to)
+                    ? 'bg-blue-100 text-blue-700 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  }
+                `}
+              >
+                <span className="text-lg">{link.icon}</span>
+                <span>{link.label}</span>
+              </Link>
+            ))}
           </div>
         </div>
       </div>
@@ -53,10 +68,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-gray-50">
-        {/* Navigation - Hidden on public sign pages */}
         <Navigation />
-
-        {/* Routes */}
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/documents" element={<DocumentsList />} />
@@ -64,7 +76,7 @@ function App() {
           <Route path="/templates" element={<TemplatesList />} />
           <Route path="/templates/:id" element={<TemplateEdit />} />
           <Route path="/sign/:token" element={<PublicSign />} />
-          <Route path="/webhooks" element={<WebhooksPage />} />  {/* ✅ ADD */}
+          <Route path="/webhooks" element={<WebhooksPage />} />
         </Routes>
       </div>
     </Router>

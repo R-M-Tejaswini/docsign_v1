@@ -50,18 +50,14 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
     
     const newRecipient = newRecipientInput.trim()
     
-    // Check if recipient already exists
     if (localRecipients.includes(newRecipient)) {
       alert('This recipient already exists')
       setNewRecipientInput('')
       return
     }
     
-    // Add new recipient to local list
     const updatedRecipients = [...localRecipients, newRecipient].sort()
     setLocalRecipients(updatedRecipients)
-    
-    // Set as current recipient
     setRecipient(newRecipient)
     setNewRecipientInput('')
     setShowNewRecipientInput(false)
@@ -74,52 +70,59 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
 
   if (!field) {
     return (
-      <div className="bg-white border rounded-lg p-6">
-        <p className="text-sm text-gray-500 text-center">
-          Select a field to edit its properties
-        </p>
+      <div className="bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-dashed border-gray-300 rounded-xl p-8">
+        <div className="text-center">
+          <div className="text-5xl mb-4">👆</div>
+          <p className="text-gray-600 font-medium">
+            Select a field to edit its properties
+          </p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="bg-white border rounded-lg p-6 space-y-4">
-      <h3 className="text-lg font-semibold">Field Properties</h3>
+    <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-5 shadow-sm">
+      <div className="border-b border-gray-200 pb-3">
+        <h3 className="text-xl font-bold text-gray-900">Field Properties</h3>
+        <p className="text-xs text-gray-600 mt-1">Configure field settings and assignment</p>
+      </div>
 
       {/* Field Type Display */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
+        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
           Field Type
         </label>
-        <div className="px-3 py-2 bg-gray-100 rounded text-sm capitalize">
+        <div className="px-4 py-3 bg-gradient-to-r from-gray-100 to-gray-50 rounded-lg text-sm font-semibold text-gray-900 capitalize border border-gray-200">
           {field.field_type}
         </div>
       </div>
 
       {/* Label Input */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Label
+        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
+          Label <span className="text-red-500">*</span>
         </label>
         <input
           type="text"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           disabled={!canEdit}
-          className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+          placeholder="e.g., Full Name, Signature, Date Signed"
+          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed text-sm font-medium"
         />
       </div>
 
       {/* Recipient Selector */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1">
-          Assigned Recipient *
+        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
+          Assigned Recipient <span className="text-red-500">*</span>
         </label>
         
         {/* Current Recipient Badge */}
         {recipient && (
-          <div className="mb-2">
-            <span className={getRecipientBadgeClasses(recipient, localRecipients)}>
+          <div className="mb-3">
+            <span className={`${getRecipientBadgeClasses(recipient, localRecipients)} shadow-sm`}>
               {recipient}
             </span>
           </div>
@@ -130,21 +133,21 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
           <button
             onClick={() => setShowRecipientList(!showRecipientList)}
             disabled={!canEdit}
-            className="w-full px-4 py-2 bg-white border-2 border-gray-300 rounded-lg hover:border-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed text-left text-gray-700 font-medium transition-colors flex justify-between items-center"
+            className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-lg hover:border-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed text-left text-gray-700 font-semibold transition-all flex justify-between items-center shadow-sm"
           >
             <span>{recipient || 'Select recipient...'}</span>
             <span className="text-gray-500">{showRecipientList ? '▲' : '▼'}</span>
           </button>
 
           {showRecipientList && canEdit && (
-            <div className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-gray-300 rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-gray-300 rounded-lg shadow-xl z-20 max-h-56 overflow-y-auto">
               {/* Existing Recipients */}
               {localRecipients.map((r) => (
                 <button
                   key={r}
                   onClick={() => handleSelectRecipient(r)}
-                  className={`w-full text-left px-4 py-2 border-b border-gray-100 hover:bg-blue-50 transition-colors ${
-                    recipient === r ? 'bg-blue-100 font-semibold' : ''
+                  className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-blue-50 transition-colors ${
+                    recipient === r ? 'bg-blue-100 font-bold' : ''
                   }`}
                 >
                   <span className={getRecipientBadgeClasses(r, localRecipients)}>
@@ -159,9 +162,10 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
                   setShowNewRecipientInput(true)
                   setShowRecipientList(false)
                 }}
-                className="w-full text-left px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium transition-colors border-t border-gray-200 flex items-center gap-2"
+                className="w-full text-left px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 text-blue-700 font-bold transition-colors border-t-2 border-blue-200 flex items-center gap-2"
               >
-                <span>+ Add New Recipient</span>
+                <span className="text-xl">➕</span>
+                <span>Add New Recipient</span>
               </button>
             </div>
           )}
@@ -169,31 +173,38 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
 
         {/* Add New Recipient Input */}
         {showNewRecipientInput && canEdit && (
-          <div className="mt-3 flex gap-2">
-            <input
-              type="text"
-              value={newRecipientInput}
-              onChange={(e) => setNewRecipientInput(e.target.value)}
-              placeholder="e.g., Recipient 2, Manager, etc."
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              onKeyPress={(e) => e.key === 'Enter' && handleAddNewRecipient()}
-              autoFocus
-            />
-            <button
-              onClick={handleAddNewRecipient}
-              className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-            >
-              Add
-            </button>
-            <button
-              onClick={() => {
-                setShowNewRecipientInput(false)
-                setNewRecipientInput('')
-              }}
-              className="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
-            >
-              Cancel
-            </button>
+          <div className="mt-3 p-4 bg-blue-50 border-2 border-blue-200 rounded-lg">
+            <label className="block text-xs font-bold text-blue-900 uppercase mb-2">
+              New Recipient Name
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newRecipientInput}
+                onChange={(e) => setNewRecipientInput(e.target.value)}
+                placeholder="e.g., Recipient 2, Manager, etc."
+                className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg focus:border-blue-500 text-sm font-medium"
+                onKeyPress={(e) => e.key === 'Enter' && handleAddNewRecipient()}
+                autoFocus
+              />
+              <Button
+                onClick={handleAddNewRecipient}
+                variant="primary"
+                size="sm"
+              >
+                Add
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowNewRecipientInput(false)
+                  setNewRecipientInput('')
+                }}
+                variant="secondary"
+                size="sm"
+              >
+                Cancel
+              </Button>
+            </div>
           </div>
         )}
       </div>
@@ -202,31 +213,38 @@ export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], can
       <div className="border-t border-gray-200"></div>
 
       {/* Required Toggle */}
-      <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-        <label className="flex items-center gap-3 cursor-pointer">
+      <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-4 border-2 border-gray-200">
+        <label className="flex items-center gap-3 cursor-pointer group">
           <input
             type="checkbox"
             checked={required}
             onChange={(e) => setRequired(e.target.checked)}
             disabled={!canEdit}
-            className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed"
+            className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed border-2 border-gray-400"
           />
-          <span className="text-sm font-medium text-gray-900">
-            Required Field
-          </span>
-          <span className="text-xs text-gray-500 ml-auto">
-            Recipient must fill this
-          </span>
+          <div className="flex-1">
+            <span className="text-sm font-bold text-gray-900 block">
+              Required Field
+            </span>
+            <span className="text-xs text-gray-600">
+              Recipient must fill this field before submitting
+            </span>
+          </div>
+          {required && (
+            <span className="text-red-500 text-xl">*</span>
+          )}
         </label>
       </div>
 
       {/* Action Buttons */}
       {canEdit && (
         <div className="space-y-2 pt-4 border-t border-gray-200">
-          <Button onClick={handleSave} variant="primary" className="flex-1">
+          <Button onClick={handleSave} variant="primary" className="w-full">
+            <span>✓</span>
             Save Changes
           </Button>
-          <Button onClick={onDelete} variant="danger" className="flex-1">
+          <Button onClick={onDelete} variant="danger" className="w-full">
+            <span>🗑️</span>
             Delete Field
           </Button>
         </div>

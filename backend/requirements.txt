@@ -4,7 +4,7 @@ requests>=2.25.0
 celery>=5.2.0
 django-cors-headers==4.3.1
 python-decouple==3.8
-Pillow==10.2.0
+Pillow==11.0.0
 PyPDF2==3.0.1
 python-dotenv==1.0.0
 reportlab>=4.0.0

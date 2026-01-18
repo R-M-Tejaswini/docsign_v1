@@ -44,7 +44,6 @@ export const PublicSign = () => {
       const data = await getSignPage()
       setPageData(data)
 
-      // Initialize field values with existing data
       const initialValues = {}
       data.fields?.forEach((field) => {
         initialValues[field.id] = field.value || ''
@@ -53,7 +52,6 @@ export const PublicSign = () => {
     } catch (err) {
       const errorData = err.response?.data
       
-      // Handle 403 Forbidden (revoked, expired, or already used)
       if (err.response?.status === 403) {
         if (errorData?.revoked) {
           setPageData({
@@ -86,7 +84,6 @@ export const PublicSign = () => {
         return
       }
 
-      // Handle 404 (invalid token)
       if (err.response?.status === 404) {
         setPageData({
           error: 'Invalid or expired token',
@@ -96,9 +93,7 @@ export const PublicSign = () => {
         return
       }
 
-      // Handle other errors
       if (errorData?.token_status === 'invalid') {
-        // Show specific error for expired/revoked tokens
         if (errorData.revoked) {
           addToast('This link has been revoked', 'error')
         } else if (errorData.expired) {
@@ -117,8 +112,6 @@ export const PublicSign = () => {
 
   const handleFieldChange = (fieldId, value) => {
     if (!pageData?.is_editable) return
-    
-    // Check if this specific field is editable
     if (!pageData.editable_field_ids?.includes(fieldId)) return
     
     setFieldValues({
@@ -133,18 +126,15 @@ export const PublicSign = () => {
       return
     }
 
-    // For view-only scope, no submission allowed
     if (pageData.scope === 'view') {
       addToast('This is a view-only link', 'warning')
       return
     }
 
-    // Get only the editable fields
     const editableFields = pageData.fields.filter((f) => 
       pageData.editable_field_ids?.includes(f.id)
     )
 
-    // Collect filled field values
     const filledFields = Object.entries(fieldValues)
       .filter(([fieldId, value]) => {
         const id = parseInt(fieldId)
@@ -155,7 +145,6 @@ export const PublicSign = () => {
         value: value,
       }))
 
-    // Validate: ALL required editable fields must be filled
     if (filledFields.length === 0) {
       addToast('Please fill at least one field', 'warning')
       return
@@ -180,10 +169,9 @@ export const PublicSign = () => {
         field_values: filledFields,
       }
 
-      const response = await submitSignature(signData)
+      await submitSignature(signData)
       addToast('Document signed successfully!', 'success')
       
-      // Reload the page data to get updated status
       setTimeout(async () => {
         await loadSignPage()
         setSignerName('')
@@ -221,10 +209,10 @@ export const PublicSign = () => {
 
   if (!pageData) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading document...</p>
+          <div className="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
+          <p className="text-gray-700 font-semibold text-lg">Loading document...</p>
         </div>
       </div>
     )
@@ -235,56 +223,54 @@ export const PublicSign = () => {
     let icon = '⚠️'
     let title = 'Access Denied'
     let description = pageData.error
-    let showRetry = false
+    let bgGradient = 'from-red-50 to-red-100'
 
     if (pageData.errorType === 'revoked') {
       icon = '🔗'
       title = 'Link Revoked'
       description = 'This signing link has been revoked and is no longer accessible.'
+      bgGradient = 'from-gray-50 to-gray-100'
     } else if (pageData.errorType === 'expired') {
       icon = '⏰'
       title = 'Link Expired'
       description = 'This signing link has expired. Please request a new one.'
+      bgGradient = 'from-yellow-50 to-yellow-100'
     } else if (pageData.errorType === 'used') {
       icon = '✓'
       title = 'Already Signed'
       description = 'This document has already been signed with this link.'
+      bgGradient = 'from-green-50 to-green-100'
     } else if (pageData.errorType === 'notfound') {
       icon = '❌'
       title = 'Invalid Link'
       description = 'The link you provided is invalid or does not exist.'
+      bgGradient = 'from-red-50 to-red-100'
     }
 
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md text-center">
-          <div className="text-5xl mb-4">{icon}</div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">{title}</h2>
-          <p className="text-gray-600 mb-6">{description}</p>
+      <div className={`min-h-screen flex items-center justify-center bg-gradient-to-br ${bgGradient}`}>
+        <div className="bg-white rounded-2xl shadow-2xl p-12 max-w-md text-center border-2 border-gray-200">
+          <div className="text-7xl mb-6">{icon}</div>
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">{title}</h2>
+          <p className="text-gray-600 text-lg leading-relaxed">{description}</p>
         </div>
       </div>
     )
   }
 
   const fileUrl = pageData.version?.file_url || pageData.version?.file
-
-  // Build absolute URL if it's a relative path
   let absoluteFileUrl = fileUrl
   if (fileUrl && !fileUrl.startsWith('http')) {
     absoluteFileUrl = `http://localhost:8000${fileUrl}`
   }
 
-  console.log('FileUrl:', fileUrl)
-  console.log('AbsoluteFileUrl:', absoluteFileUrl)
-
-  // Add validation
   if (!absoluteFileUrl) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="bg-white rounded-lg shadow-lg p-8 max-w-md text-center">
-          <div className="text-red-500 text-5xl mb-4">⚠️</div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">File Not Found</h2>
-          <p className="text-gray-600 mb-4">The PDF file for this document could not be found.</p>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-red-100">
+        <div className="bg-white rounded-2xl shadow-2xl p-12 max-w-md text-center border-2 border-red-200">
+          <div className="text-red-500 text-7xl mb-6">⚠️</div>
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">File Not Found</h2>
+          <p className="text-gray-600 text-lg mb-6">The PDF file for this document could not be found.</p>
           <Button onClick={() => navigate('/')} variant="primary">
             Go to Home
           </Button>
@@ -294,45 +280,40 @@ export const PublicSign = () => {
   }
   
   const pageFields = pageData.fields.filter((f) => f.page_number === currentPage)
-  
-  // Get all recipients used in the document
   const allRecipients = [...new Set(pageData.fields.map(f => f.recipient))].filter(Boolean)
-  
-  // Separate fields by editability and recipient
-  const editableFields = pageFields.filter(f => 
-    pageData.editable_field_ids?.includes(f.id)
-  )
+  const editableFields = pageFields.filter(f => pageData.editable_field_ids?.includes(f.id))
   const lockedFields = pageFields.filter(f => f.locked)
   const otherRecipientFields = pageFields.filter(f => 
     !pageData.editable_field_ids?.includes(f.id) && !f.locked
   )
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen bg-gray-50">
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className="bg-white border-b px-6 py-4">
-          <h1 className="text-2xl font-bold text-gray-900">
+        {/* Header - NO NAVBAR */}
+        <div className="bg-white border-b-2 border-gray-200 px-6 py-4 shadow-md">
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">
             {pageData.version?.document?.title || 'Document Signing'}
           </h1>
-          <div className="flex items-center gap-4 mt-2 text-sm">
-            <span className={`px-3 py-1 rounded-full font-medium ${
+          <div className="flex items-center gap-4 flex-wrap text-sm">
+            <span className={`px-4 py-1.5 rounded-full font-bold shadow-sm ${
               pageData.scope === 'sign' 
-                ? 'bg-blue-100 text-blue-800' 
-                : 'bg-gray-100 text-gray-800'
+                ? 'bg-blue-100 text-blue-800 border-2 border-blue-200' 
+                : 'bg-gray-100 text-gray-800 border-2 border-gray-200'
             }`}>
               {pageData.scope === 'sign' ? '✍️ Sign Mode' : '👁️ View Mode'}
             </span>
             
             {pageData.recipient && (
-              <span className={getRecipientBadgeClasses(pageData.recipient, allRecipients)}>
+              <span className={`${getRecipientBadgeClasses(pageData.recipient, allRecipients)} shadow-sm`}>
                 {pageData.recipient}
               </span>
             )}
             
             {pageData.expires_at && (
-              <span className="text-gray-500">
+              <span className="text-gray-600 font-semibold flex items-center gap-1">
+                <span>⏱</span>
                 Expires: {new Date(pageData.expires_at).toLocaleDateString()}
               </span>
             )}
@@ -355,7 +336,7 @@ export const PublicSign = () => {
                   position: 'relative',
                 }}
               >
-                {/* Render locked/signed fields (read-only) */}
+                {/* Locked/signed fields */}
                 {lockedFields.map((field) => {
                   const pxField = fieldPctToPx(field, 612, 792)
                   const recipientColor = getRecipientColor(field.recipient, allRecipients)
@@ -363,7 +344,7 @@ export const PublicSign = () => {
                   return (
                     <div
                       key={`locked-${field.id}`}
-                      className="absolute border-2 bg-green-50 border-green-500 flex items-center px-2"
+                      className="absolute border-2 flex items-center px-2 shadow-md"
                       style={{
                         left: pxField.x * scale,
                         top: pxField.y * scale,
@@ -371,19 +352,19 @@ export const PublicSign = () => {
                         height: pxField.height * scale,
                         fontSize: `${Math.max(10, pxField.height * scale * 0.5)}px`,
                         borderColor: recipientColor.color,
-                        backgroundColor: `${recipientColor.color}15`,
+                        backgroundColor: `${recipientColor.color}20`,
                       }}
                       title={`${field.recipient} - Signed`}
                     >
-                      <span className="truncate text-gray-700">
+                      <span className="truncate text-gray-800 font-semibold">
                         {field.value}
                       </span>
-                      <span className="ml-auto text-green-600 text-xs">✓</span>
+                      <span className="ml-auto text-green-600 text-sm font-bold">✓</span>
                     </div>
                   )
                 })}
 
-                {/* Render other recipients' fields (not editable, not signed) */}
+                {/* Other recipients' fields */}
                 {otherRecipientFields.map((field) => {
                   const pxField = fieldPctToPx(field, 612, 792)
                   const recipientColor = getRecipientColor(field.recipient, allRecipients)
@@ -398,18 +379,18 @@ export const PublicSign = () => {
                         width: pxField.width * scale,
                         height: pxField.height * scale,
                         borderColor: recipientColor.color,
-                        opacity: 0.5,
+                        opacity: 0.6,
                       }}
                       title={`${field.recipient} - Pending`}
                     >
-                      <div className="text-xs text-gray-500 px-1 truncate">
+                      <div className="text-xs text-gray-500 px-1 truncate font-semibold">
                         {field.label}
                       </div>
                     </div>
                   )
                 })}
 
-                {/* Render editable fields as inputs */}
+                {/* Editable fields */}
                 {pageData.is_editable &&
                   editableFields.map((field) => {
                     const pxField = fieldPctToPx(field, 612, 792)
@@ -424,7 +405,7 @@ export const PublicSign = () => {
                           top: pxField.y * scale,
                           width: pxField.width * scale,
                           height: pxField.height * scale,
-                          zIndex: 10,  // ← Add this
+                          zIndex: 10,
                         }}
                       >
                         {field.field_type === 'checkbox' ? (
@@ -434,7 +415,7 @@ export const PublicSign = () => {
                             onChange={(e) =>
                               handleFieldChange(field.id, e.target.checked.toString())
                             }
-                            className="w-6 h-6 cursor-pointer"  // ← Fixed sizing
+                            className="w-6 h-6 cursor-pointer"
                             style={{
                               accentColor: recipientColor.color,
                             }}
@@ -448,13 +429,12 @@ export const PublicSign = () => {
                               handleFieldChange(field.id, e.target.value)
                             }
                             placeholder={field.label}
-                            className="w-full h-full px-2 py-1 border-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-20"
+                            className="w-full h-full px-2 py-1 border-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-20 shadow-sm"
                             style={{
                               fontSize: `${Math.max(10, pxField.height * scale * 0.5)}px`,
                               borderColor: recipientColor.color,
                               backgroundColor: '#ffffff',
                               boxSizing: 'border-box',
-                              // Apply handwriting font to signature fields
                               fontFamily: field.field_type === 'signature' ? "'Dancing Script', cursive" : 'inherit',
                               fontWeight: field.field_type === 'signature' ? '700' : 'normal',
                               letterSpacing: field.field_type === 'signature' ? '0.5px' : 'normal',
@@ -473,18 +453,21 @@ export const PublicSign = () => {
       </div>
 
       {/* Right Sidebar */}
-      <div className="w-80 bg-white border-l overflow-y-auto">
+      <div className="w-96 bg-white border-l-2 border-gray-200 overflow-y-auto shadow-lg">
         <div className="p-6 space-y-6">
-          {/* Signing Form (for sign mode) */}
+          {/* Signing Form */}
           {pageData.is_editable && pageData.scope === 'sign' && !pageData.used && (
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold text-gray-900">Sign Document</h3>
+              <div className="border-b-2 border-gray-200 pb-3">
+                <h3 className="text-xl font-bold text-gray-900">Sign Document</h3>
+                <p className="text-xs text-gray-600 mt-1">Complete the fields below to sign</p>
+              </div>
               
               {/* Recipient Info */}
               {pageData.recipient && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                  <p className="text-xs text-gray-600 mb-1">Signing as:</p>
-                  <span className={getRecipientBadgeClasses(pageData.recipient, allRecipients)}>
+                <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+                  <p className="text-xs text-gray-600 mb-2 font-semibold uppercase tracking-wide">Signing as:</p>
+                  <span className={`${getRecipientBadgeClasses(pageData.recipient, allRecipients)} shadow-sm`}>
                     {pageData.recipient}
                   </span>
                 </div>
@@ -492,48 +475,47 @@ export const PublicSign = () => {
 
               {/* Signer Name Input */}
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-bold text-gray-900 mb-2">
                   Your Full Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   value={signerName}
                   onChange={(e) => setSignerName(e.target.value)}
-                  placeholder="Name here..."
-                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none text-center text-xl transition-colors"
+                  placeholder="Enter your full name..."
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 text-center text-lg font-semibold transition-all"
                 />
               </div>
 
               {/* Fields Summary */}
-              <div className="border-t pt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-3">
+              <div className="border-t-2 border-gray-200 pt-4">
+                <h4 className="text-sm font-bold text-gray-900 mb-3">
                   Your Fields ({editableFields.length})
                 </h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
+                <div className="space-y-2 max-h-64 overflow-y-auto">
                   {editableFields.map((field) => {
                     const isFilled = fieldValues[field.id] && fieldValues[field.id].trim()
                     return (
                       <div 
                         key={field.id} 
-                        className="text-sm p-2 bg-gray-50 rounded hover:bg-gray-100 cursor-pointer"
+                        className="text-sm p-3 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-all border border-gray-200"
                         onClick={() => {
-                          // Scroll to field's page if not on current page
                           if (field.page_number !== currentPage) {
                             setCurrentPage(field.page_number)
                           }
                         }}
                       >
                         <div className="flex justify-between items-center">
-                          <span className="text-gray-700">
+                          <span className="text-gray-900 font-semibold">
                             {field.label}
                             {field.required && <span className="text-red-500 ml-1">*</span>}
                           </span>
-                          <span className={`text-xs ${isFilled ? 'text-green-600' : 'text-gray-400'}`}>
+                          <span className={`text-xs font-bold ${isFilled ? 'text-green-600' : 'text-gray-400'}`}>
                             {isFilled ? '✓ Filled' : '○ Empty'}
                           </span>
                         </div>
                         {field.page_number !== currentPage && (
-                          <div className="text-xs text-blue-600 mt-1">
+                          <div className="text-xs text-blue-600 mt-1 font-semibold">
                             → Page {field.page_number}
                           </div>
                         )}
@@ -550,10 +532,20 @@ export const PublicSign = () => {
                 className="w-full"
                 disabled={submitting}
               >
-                {submitting ? 'Signing...' : 'Submit Signature'}
+                {submitting ? (
+                  <>
+                    <span className="animate-spin">⟳</span>
+                    Signing...
+                  </>
+                ) : (
+                  <>
+                    <span>✍️</span>
+                    Submit Signature
+                  </>
+                )}
               </Button>
 
-              <p className="text-xs text-gray-500 text-center">
+              <p className="text-xs text-gray-600 text-center leading-relaxed">
                 Fill all required fields above and click Submit to sign
               </p>
             </div>
@@ -562,28 +554,30 @@ export const PublicSign = () => {
           {/* View Mode / Already Signed */}
           {(!pageData.is_editable || pageData.scope === 'view' || pageData.used) && (
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">
-                {pageData.scope === 'view' ? '👁️ View Only' : '✓ Document Signed'}
-              </h3>
-              <p className="text-sm text-gray-600">
-                {pageData.scope === 'view' 
-                  ? 'This document is in view-only mode. Fields cannot be edited.'
-                  : 'Thank you for signing! This document has been successfully signed.'}
-              </p>
+              <div className="border-b-2 border-gray-200 pb-3">
+                <h3 className="text-xl font-bold text-gray-900">
+                  {pageData.scope === 'view' ? '👁️ View Only' : '✓ Document Signed'}
+                </h3>
+                <p className="text-sm text-gray-600 mt-2 leading-relaxed">
+                  {pageData.scope === 'view' 
+                    ? 'This document is in view-only mode. Fields cannot be edited.'
+                    : 'Thank you for signing! This document has been successfully signed.'}
+                </p>
+              </div>
 
               {/* Recipient Status */}
               {pageData.recipient_status && (
-                <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
+                <div className="border-t-2 border-gray-200 pt-4">
+                  <h4 className="text-sm font-bold text-gray-900 mb-3">
                     Completion Status
                   </h4>
                   <div className="space-y-2">
                     {Object.entries(pageData.recipient_status).map(([recipient, status]) => (
-                      <div key={recipient} className="flex items-center justify-between text-sm">
+                      <div key={recipient} className="flex items-center justify-between text-sm p-3 bg-gray-50 rounded-lg border border-gray-200">
                         <span className={getRecipientBadgeClasses(recipient, allRecipients)}>
                           {recipient}
                         </span>
-                        <span className={`text-xs px-2 py-1 rounded ${
+                        <span className={`text-xs px-3 py-1 rounded-full font-bold ${
                           status.completed 
                             ? 'bg-green-100 text-green-800' 
                             : 'bg-yellow-100 text-yellow-800'
@@ -598,25 +592,25 @@ export const PublicSign = () => {
 
               {/* Signatures List */}
               {pageData.signatures?.length > 0 && (
-                <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
+                <div className="border-t-2 border-gray-200 pt-4">
+                  <h4 className="text-sm font-bold text-gray-900 mb-3">
                     Signatures ({pageData.signatures.length})
                   </h4>
-                  <div className="space-y-3 max-h-60 overflow-y-auto">
+                  <div className="space-y-3 max-h-64 overflow-y-auto">
                     {pageData.signatures.map((sig, idx) => (
-                      <div key={idx} className="text-sm p-3 bg-gray-50 rounded border">
+                      <div key={idx} className="text-sm p-4 bg-green-50 rounded-lg border-2 border-green-200">
                         <div className="flex items-center justify-between mb-2">
                           <span className={getRecipientBadgeClasses(sig.recipient, allRecipients)}>
                             {sig.recipient}
                           </span>
-                          <span className="text-xs text-green-600">✓ Signed</span>
+                          <span className="text-xs text-green-600 font-bold">✓ Signed</span>
                         </div>
-                        <div className="font-medium text-gray-900">{sig.signer_name_display}</div>
-                        <div className="text-xs text-gray-500 mt-1">
+                        <div className="font-bold text-gray-900 text-base">{sig.signer_name_display}</div>
+                        <div className="text-xs text-gray-600 mt-1">
                           {new Date(sig.signed_at).toLocaleString()}
                         </div>
                         {sig.ip_address && (
-                          <div className="text-xs text-gray-400 mt-1">
+                          <div className="text-xs text-gray-500 mt-1 font-mono">
                             IP: {sig.ip_address}
                           </div>
                         )}
@@ -628,25 +622,25 @@ export const PublicSign = () => {
 
               {/* All Fields Display */}
               {pageData.fields?.length > 0 && (
-                <div className="border-t pt-4">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
+                <div className="border-t-2 border-gray-200 pt-4">
+                  <h4 className="text-sm font-bold text-gray-900 mb-3">
                     Document Fields
                   </h4>
-                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
                     {pageData.fields
                       .filter(f => f.value)
                       .map((field) => (
-                        <div key={field.id} className="text-sm p-2 bg-gray-50 rounded">
+                        <div key={field.id} className="text-sm p-3 bg-gray-50 rounded-lg border border-gray-200">
                           <div className="flex items-center gap-2 mb-1">
                             <span className={getRecipientBadgeClasses(field.recipient, allRecipients)}>
                               {field.recipient}
                             </span>
                             {field.locked && (
-                              <span className="text-xs text-green-600">✓</span>
+                              <span className="text-xs text-green-600 font-bold">✓</span>
                             )}
                           </div>
-                          <div className="font-medium text-gray-700">{field.label}</div>
-                          <div className="text-gray-600 mt-1">{field.value}</div>
+                          <div className="font-semibold text-gray-900">{field.label}</div>
+                          <div className="text-gray-700 mt-1">{field.value}</div>
                         </div>
                       ))}
                   </div>
@@ -659,29 +653,39 @@ export const PublicSign = () => {
           {pageData.version?.status === 'completed' && (
             <Button
               onClick={handleDownloadPdf}
-              variant="primary"
+              variant="success"
               className="w-full"
               disabled={downloadingPdf}
             >
-              {downloadingPdf ? 'Downloading...' : '⬇️ Download Signed PDF'}
+              {downloadingPdf ? (
+                <>
+                  <span className="animate-spin">⟳</span>
+                  Downloading...
+                </>
+              ) : (
+                <>
+                  <span>⬇️</span>
+                  Download Signed PDF
+                </>
+              )}
             </Button>
           )}
 
           {/* Legend */}
-          <div className="border-t pt-4">
-            <h4 className="text-sm font-medium text-gray-700 mb-2">Legend</h4>
-            <div className="space-y-1 text-xs">
+          <div className="border-t-2 border-gray-200 pt-4">
+            <h4 className="text-sm font-bold text-gray-900 mb-3">Legend</h4>
+            <div className="space-y-2 text-xs">
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-blue-500 bg-blue-50"></div>
-                <span>Your fields (editable)</span>
+                <div className="w-5 h-5 border-2 border-blue-500 bg-blue-50 rounded"></div>
+                <span className="font-semibold">Your fields (editable)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-green-500 bg-green-50"></div>
-                <span>Signed fields (locked)</span>
+                <div className="w-5 h-5 border-2 border-green-500 bg-green-50 rounded"></div>
+                <span className="font-semibold">Signed fields (locked)</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-dashed border-gray-400 bg-gray-50"></div>
-                <span>Other recipients' fields</span>
+                <div className="w-5 h-5 border-2 border-dashed border-gray-400 bg-gray-50 rounded"></div>
+                <span className="font-semibold">Other recipients' fields</span>
               </div>
             </div>
           </div>

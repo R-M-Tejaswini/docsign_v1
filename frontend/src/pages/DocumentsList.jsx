@@ -8,7 +8,7 @@ import { getRecipientBadgeClasses } from '../utils/recipientColors'
 
 export const DocumentsList = () => {
   const navigate = useNavigate()
-  const location = useLocation()  // ← Add this
+  const location = useLocation()
   const [documentVersions, setDocumentVersions] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newDocTitle, setNewDocTitle] = useState('')
@@ -17,7 +17,7 @@ export const DocumentsList = () => {
   const [templates, setTemplates] = useState([])
   const [copyingVersionId, setCopyingVersionId] = useState(null)
   const [downloadingVersionId, setDownloadingVersionId] = useState(null)
-  const [createMode, setCreateMode] = useState('template') // 'template' or 'upload'
+  const [createMode, setCreateMode] = useState('template')
   
   const { execute: listDocuments, loading } = useApi(() => documentAPI.list())
   const { execute: createDocument } = useApi((data) => documentAPI.create(data))
@@ -31,7 +31,7 @@ export const DocumentsList = () => {
   useEffect(() => {
     loadDocuments()
     loadTemplates()
-  }, [location.pathname])  // ← Reload when navigating back
+  }, [location.pathname])
 
   const loadDocuments = async () => {
     try {
@@ -57,10 +57,8 @@ export const DocumentsList = () => {
   const loadTemplates = async () => {
     try {
       const axiosResponse = await templateAPI.list()
-      // Extract data from axios response
       const data = axiosResponse.data || axiosResponse
       
-      // Handle different response structures
       let templatesArray = []
       if (data && typeof data === 'object') {
         if (Array.isArray(data)) {
@@ -72,7 +70,7 @@ export const DocumentsList = () => {
       setTemplates(templatesArray)
     } catch (err) {
       console.error('Failed to load templates:', err)
-      setTemplates([]) // Set empty array on error
+      setTemplates([])
     }
   }
 
@@ -119,8 +117,8 @@ export const DocumentsList = () => {
   const handleCopyVersion = async (documentId, versionId) => {
     try {
       setCopyingVersionId(versionId)
-      const newVersion = await copyDocumentVersion(documentId, versionId)
-      await loadDocuments()  // ← Refresh list
+      await copyDocumentVersion(documentId, versionId)
+      await loadDocuments()
       navigate(`/documents/${documentId}`)
     } catch (err) {
       alert('Failed to copy version: ' + (err.response?.data?.error || err.message))
@@ -134,7 +132,6 @@ export const DocumentsList = () => {
       setDownloadingVersionId(versionId)
       const blob = await downloadVersion(documentId, versionId)
       
-      // Create download link
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -153,34 +150,39 @@ export const DocumentsList = () => {
   const getStatusBadge = (status) => {
     const badges = {
       draft: {
-        bg: 'bg-blue-100',
-        text: 'text-blue-800',
+        bg: 'bg-gradient-to-r from-blue-500 to-blue-600',
+        text: 'text-white',
         icon: '✏️',
-        label: 'Draft'
+        label: 'Draft',
+        ring: 'ring-blue-200'
       },
       locked: {
-        bg: 'bg-yellow-100',
-        text: 'text-yellow-800',
+        bg: 'bg-gradient-to-r from-yellow-500 to-yellow-600',
+        text: 'text-white',
         icon: '🔒',
-        label: 'Locked'
+        label: 'Locked',
+        ring: 'ring-yellow-200'
       },
       'partially_signed': {
-        bg: 'bg-purple-100',
-        text: 'text-purple-800',
+        bg: 'bg-gradient-to-r from-purple-500 to-purple-600',
+        text: 'text-white',
         icon: '⏳',
-        label: 'Signing'
+        label: 'Signing',
+        ring: 'ring-purple-200'
       },
       'in-progress': {
-        bg: 'bg-purple-100',
-        text: 'text-purple-800',
+        bg: 'bg-gradient-to-r from-purple-500 to-purple-600',
+        text: 'text-white',
         icon: '⏳',
-        label: 'Signing'
+        label: 'Signing',
+        ring: 'ring-purple-200'
       },
       completed: {
-        bg: 'bg-green-100',
-        text: 'text-green-800',
+        bg: 'bg-gradient-to-r from-green-500 to-green-600',
+        text: 'text-white',
         icon: '✓',
-        label: 'Completed'
+        label: 'Completed',
+        ring: 'ring-green-200'
       }
     }
     return badges[status] || badges.draft
@@ -211,7 +213,12 @@ export const DocumentsList = () => {
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-8">
-        <div className="text-center text-gray-500">Loading documents...</div>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
+            <p className="text-gray-600 font-medium">Loading documents...</p>
+          </div>
+        </div>
       </div>
     )
   }
@@ -221,14 +228,16 @@ export const DocumentsList = () => {
       {/* Header */}
       <div className="flex justify-between items-center mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Documents</h1>
-          <p className="text-gray-600 mt-2">All document versions for signing and editing</p>
+          <h1 className="text-4xl font-bold text-gray-900 mb-2">Documents</h1>
+          <p className="text-lg text-gray-600">All document versions for signing and tracking</p>
         </div>
         <Button
           onClick={() => setShowCreateModal(true)}
           variant="primary"
+          size="lg"
         >
-          + Create Document
+          <span>➕</span>
+          Create Document
         </Button>
       </div>
 
@@ -244,51 +253,65 @@ export const DocumentsList = () => {
         }}
         title="Create New Document"
       >
-        <div className="space-y-4">
+        <div className="space-y-6">
           {/* Document Title */}
           <div>
-            <label className="block text-sm font-medium text-gray-900 mb-2">
-              Document Title
+            <label className="block text-sm font-semibold text-gray-900 mb-2">
+              Document Title <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={newDocTitle}
               onChange={(e) => setNewDocTitle(e.target.value)}
-              placeholder="Enter document title"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              placeholder="e.g., Contract for John Doe, Q1 2024 Agreement"
+              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 text-base"
             />
           </div>
 
           {/* Create Mode Selector */}
           <div>
-            <label className="block text-sm font-medium text-gray-900 mb-3">
+            <label className="block text-sm font-semibold text-gray-900 mb-3">
               How would you like to create this document?
             </label>
-            <div className="space-y-2">
-              <label className="flex items-center gap-3 p-3 border-2 rounded-lg cursor-pointer transition-colors" 
-                style={{ borderColor: createMode === 'template' ? '#3b82f6' : '#e5e7eb', backgroundColor: createMode === 'template' ? '#eff6ff' : 'white' }}>
+            <div className="space-y-3">
+              <label className={`flex items-start p-4 border-2 rounded-xl cursor-pointer transition-all ${createMode === 'template' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : 'border-gray-300 hover:border-gray-400'}`}>
                 <input
                   type="radio"
                   name="create-mode"
                   value="template"
                   checked={createMode === 'template'}
                   onChange={(e) => setCreateMode(e.target.value)}
-                  className="w-4 h-4 text-blue-600"
+                  className="w-5 h-5 text-blue-600 mt-0.5"
                 />
-                <span className="font-medium text-gray-900">Use Existing Template</span>
+                <div className="ml-3 flex-1">
+                  <div className="font-semibold text-gray-900 flex items-center gap-2">
+                    <span>📋</span>
+                    Use Existing Template
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    Start with a pre-configured template
+                  </div>
+                </div>
               </label>
               
-              <label className="flex items-center gap-3 p-3 border-2 rounded-lg cursor-pointer transition-colors"
-                style={{ borderColor: createMode === 'upload' ? '#3b82f6' : '#e5e7eb', backgroundColor: createMode === 'upload' ? '#eff6ff' : 'white' }}>
+              <label className={`flex items-start p-4 border-2 rounded-xl cursor-pointer transition-all ${createMode === 'upload' ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200' : 'border-gray-300 hover:border-gray-400'}`}>
                 <input
                   type="radio"
                   name="create-mode"
                   value="upload"
                   checked={createMode === 'upload'}
                   onChange={(e) => setCreateMode(e.target.value)}
-                  className="w-4 h-4 text-blue-600"
+                  className="w-5 h-5 text-blue-600 mt-0.5"
                 />
-                <span className="font-medium text-gray-900">Upload PDF File</span>
+                <div className="ml-3 flex-1">
+                  <div className="font-semibold text-gray-900 flex items-center gap-2">
+                    <span>📤</span>
+                    Upload PDF File
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    Upload a new PDF document
+                  </div>
+                </div>
               </label>
             </div>
           </div>
@@ -296,18 +319,18 @@ export const DocumentsList = () => {
           {/* Template Selection */}
           {createMode === 'template' && (
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
-                Select Template *
+              <label className="block text-sm font-semibold text-gray-900 mb-2">
+                Select Template <span className="text-red-500">*</span>
               </label>
               {!templates || templates.length === 0 ? (
-                <p className="text-sm text-gray-500 p-3 bg-gray-50 rounded-lg">
-                  No templates available. <a href="/templates" className="text-blue-600 hover:underline">Create one first</a>
-                </p>
+                <div className="text-sm text-gray-600 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                  No templates available. <a href="/templates" className="text-blue-600 hover:underline font-semibold">Create one first</a>
+                </div>
               ) : (
                 <select
                   value={selectedTemplateId || ''}
                   onChange={(e) => setSelectedTemplateId(Number(e.target.value))}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100 bg-white"
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 bg-white text-base"
                 >
                   <option value="">-- Select a template --</option>
                   {templates.map((template) => (
@@ -323,17 +346,18 @@ export const DocumentsList = () => {
           {/* File Upload */}
           {createMode === 'upload' && (
             <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">
-                Upload PDF File *
+              <label className="block text-sm font-semibold text-gray-900 mb-2">
+                Upload PDF File <span className="text-red-500">*</span>
               </label>
               <input
                 type="file"
                 accept=".pdf"
                 onChange={(e) => setNewDocFile(e.target.files?.[0] || null)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition-colors file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
               />
               {newDocFile && (
-                <p className="text-xs text-gray-600 mt-2">
+                <p className="text-sm text-green-600 mt-2 flex items-center gap-2">
+                  <span>✓</span>
                   Selected: {newDocFile.name}
                 </p>
               )}
@@ -341,7 +365,7 @@ export const DocumentsList = () => {
           )}
 
           {/* Action Buttons */}
-          <div className="flex gap-2 pt-4">
+          <div className="flex gap-3 pt-4">
             <Button
               onClick={() => {
                 setShowCreateModal(false)
@@ -360,7 +384,7 @@ export const DocumentsList = () => {
               variant="primary"
               className="flex-1"
             >
-              Create
+              Create Document
             </Button>
           </div>
         </div>
@@ -368,15 +392,19 @@ export const DocumentsList = () => {
 
       {/* Documents Grid */}
       {documentVersions.length === 0 ? (
-        <div className="text-center py-16">
-          <div className="text-4xl mb-4">📄</div>
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">No documents yet</h2>
-          <p className="text-gray-600 mb-6">Create your first document to get started</p>
+        <div className="text-center py-20 bg-white rounded-2xl shadow-lg">
+          <div className="text-7xl mb-6">📄</div>
+          <h2 className="text-3xl font-bold text-gray-900 mb-3">No documents yet</h2>
+          <p className="text-lg text-gray-600 mb-8 max-w-md mx-auto">
+            Create your first document to start collecting signatures
+          </p>
           <Button
             onClick={() => setShowCreateModal(true)}
             variant="primary"
+            size="lg"
           >
-            Create Document
+            <span>➕</span>
+            Create Your First Document
           </Button>
         </div>
       ) : (
@@ -390,27 +418,31 @@ export const DocumentsList = () => {
             return (
               <div
                 key={`${version.document_id}-${version.id}`}
-                className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow overflow-hidden group"
+                className="bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden group border border-gray-100 hover:border-indigo-300"
               >
                 {/* Card Preview Area */}
-                <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 h-40 flex items-center justify-center group-hover:from-indigo-100 group-hover:to-indigo-200 transition-colors">
-                  <div className="text-4xl text-indigo-300">📑</div>
+                <div className="bg-gradient-to-br from-indigo-50 to-purple-100 h-44 flex items-center justify-center group-hover:from-indigo-100 group-hover:to-purple-200 transition-all duration-300 relative overflow-hidden">
+                  <div className="absolute inset-0 opacity-10" style={{
+                    backgroundImage: 'radial-gradient(circle at 2px 2px, rgba(99, 102, 241, 0.5) 1px, transparent 0)',
+                    backgroundSize: '20px 20px'
+                  }}></div>
+                  <div className="text-6xl text-indigo-400 group-hover:scale-110 transition-transform duration-300 relative z-10">📑</div>
                 </div>
 
                 {/* Card Content */}
                 <div className="p-6 space-y-4">
                   {/* Document Title and Status */}
                   <div>
-                    <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="flex items-start justify-between gap-3 mb-2">
                       <div className="flex-1 min-w-0">
-                        <h3 className="text-lg font-semibold text-gray-900 line-clamp-2">
+                        <h3 className="text-xl font-bold text-gray-900 line-clamp-2 group-hover:text-indigo-600 transition-colors">
                           {version.document_title}
                         </h3>
-                        <p className="text-xs text-gray-500 mt-1">
-                          v{version.version_number}
+                        <p className="text-xs text-gray-500 mt-1 font-semibold">
+                          Version {version.version_number}
                         </p>
                       </div>
-                      <span className={`${statusBadge.bg} ${statusBadge.text} text-xs font-semibold px-2.5 py-1 rounded-full whitespace-nowrap flex items-center gap-1`}>
+                      <span className={`${statusBadge.bg} ${statusBadge.text} text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap flex items-center gap-1.5 shadow-lg ring-2 ${statusBadge.ring}`}>
                         <span>{statusBadge.icon}</span>
                         {statusBadge.label}
                       </span>
@@ -423,19 +455,19 @@ export const DocumentsList = () => {
                   </div>
 
                   {/* Version Info */}
-                  <div className="space-y-3 pt-2 border-t border-gray-200">
+                  <div className="space-y-3 pt-3 border-t border-gray-200">
                     {/* Progress Bar for Signing */}
                     {progressText && (
                       <div>
                         <div className="flex justify-between items-center mb-2">
-                          <span className="text-xs font-medium text-gray-600">
-                            Signing Progress
+                          <span className="text-xs font-semibold text-gray-600 uppercase">
+                            Progress
                           </span>
-                          <span className="text-xs font-semibold text-gray-900">
+                          <span className="text-xs font-bold text-gray-900">
                             {progressText}
                           </span>
                         </div>
-                        <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-inner">
                           {(() => {
                             const statuses = Object.values(version.recipient_status || {})
                             const completed = statuses.filter(s => s.completed).length
@@ -443,7 +475,7 @@ export const DocumentsList = () => {
                             const percentage = (completed / total) * 100
                             return (
                               <div
-                                className="bg-gradient-to-r from-green-400 to-green-600 h-full rounded-full transition-all"
+                                className="bg-gradient-to-r from-green-400 via-green-500 to-green-600 h-full rounded-full transition-all duration-500 shadow-sm"
                                 style={{ width: `${percentage}%` }}
                               ></div>
                             )
@@ -455,14 +487,14 @@ export const DocumentsList = () => {
                     {/* Recipients */}
                     {allRecipients.length > 0 && (
                       <div>
-                        <span className="text-xs font-medium text-gray-600 block mb-2">
+                        <span className="text-xs font-semibold text-gray-600 uppercase block mb-2">
                           Recipients ({Array.from(new Set(allRecipients)).length})
                         </span>
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-2">
                           {Array.from(new Set(allRecipients)).map((recipient, idx) => (
                             <span
                               key={`${version.id}-recipient-${idx}-${recipient}`}
-                              className={`${getRecipientBadgeClasses(recipient, allRecipients)} text-xs`}
+                              className={`${getRecipientBadgeClasses(recipient, allRecipients)} text-xs shadow-sm`}
                             >
                               {recipient}
                             </span>
@@ -472,25 +504,28 @@ export const DocumentsList = () => {
                     )}
 
                     {/* Metadata */}
-                    <div className="flex justify-between items-center text-xs text-gray-500">
-                      <span>Created: {formatDate(version.created_at)}</span>
-                      <span className="text-gray-700 font-medium">
+                    <div className="flex justify-between items-center text-xs text-gray-500 pt-2 border-t border-gray-200">
+                      <span className="flex items-center gap-1">
+                        <span>📅</span>
+                        {formatDate(version.created_at)}
+                      </span>
+                      <span className="text-gray-700 font-bold flex items-center gap-1">
+                        <span>📄</span>
                         {version.page_count} pages
                       </span>
                     </div>
                   </div>
 
                   {/* Action Buttons */}
-                  <div className="space-y-2 pt-2 border-t border-gray-200">
+                  <div className="space-y-2 pt-3 border-t border-gray-200">
                     <Button
                       onClick={() => navigate(`/documents/${version.document_id}`)}
-                      variant="secondary"
+                      variant="primary"
                       className="w-full"
                     >
-                      Open →
+                      Open Document →
                     </Button>
                     
-                    {/* Copy Version Button - only for locked/completed versions */}
                     {isLocked && (
                       <Button
                         onClick={() => handleCopyVersion(version.document_id, version.id)}
@@ -498,19 +533,38 @@ export const DocumentsList = () => {
                         className="w-full"
                         disabled={copyingVersionId === version.id}
                       >
-                        {copyingVersionId === version.id ? 'Copying...' : '📋 Create New Version'}
+                        {copyingVersionId === version.id ? (
+                          <>
+                            <span className="animate-spin">⟳</span>
+                            Copying...
+                          </>
+                        ) : (
+                          <>
+                            <span>📋</span>
+                            Create New Version
+                          </>
+                        )}
                       </Button>
                     )}
 
-                    {/* Download PDF Button - only for locked/completed versions */}
                     {isLocked && version.status === 'completed' && (
                       <Button
                         onClick={() => handleDownloadVersion(version.document_title, version.id, version.document_id)}
-                        variant="secondary"
+                        variant="success"
                         className="w-full"
                         disabled={downloadingVersionId === version.id}
                       >
-                        {downloadingVersionId === version.id ? 'Downloading...' : '⬇️ Download PDF'}
+                        {downloadingVersionId === version.id ? (
+                          <>
+                            <span className="animate-spin">⟳</span>
+                            Downloading...
+                          </>
+                        ) : (
+                          <>
+                            <span>⬇️</span>
+                            Download PDF
+                          </>
+                        )}
                       </Button>
                     )}
                   </div>
