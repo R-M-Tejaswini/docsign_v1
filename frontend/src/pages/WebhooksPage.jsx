@@ -270,7 +270,7 @@ export const WebhooksPage = () => {
         onClose={() => setShowCreateModal(false)}
         title="Create Webhook"
       >
-        <div className="space-y-6">
+        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
           {/* URL Input */}
           <div>
             <label className="block text-sm font-bold text-gray-900 mb-2">

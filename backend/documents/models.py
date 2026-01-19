@@ -6,6 +6,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from PyPDF2 import PdfReader
+from datetime import timedelta
 
 
 def document_version_upload_path(instance, filename):
@@ -67,6 +68,7 @@ class DocumentVersion(models.Model):
         choices=[
             ('draft', 'Draft'),
             ('locked', 'Locked for signing'),
+            ('partially_signed', 'Partially signed'),
             ('completed', 'Fully signed'),
         ],
         default='draft'
@@ -358,7 +360,7 @@ class SigningToken(models.Model):
         token_str = secrets.token_urlsafe(32)
         expires_at = None
         if expires_in_days:
-            expires_at = timezone.now() + timezone.timedelta(days=expires_in_days)
+            expires_at = timezone.now() + timedelta(days=expires_in_days)
         
         return cls.objects.create(
             token=token_str,
