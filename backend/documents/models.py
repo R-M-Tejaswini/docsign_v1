@@ -414,6 +414,8 @@ class SignatureEvent(models.Model):
     )
     signer_name = models.CharField(max_length=255)
     signed_at = models.DateTimeField(auto_now_add=True)
+    group_session_token = models.CharField(max_length=64, blank=True, null=True, db_index=True)  # Reference to GroupSigningSession
+
     
     # Audit metadata
     ip_address = models.GenericIPAddressField(null=True, blank=True)
@@ -633,3 +635,115 @@ class WebhookDeliveryLog(models.Model):
     
     def __str__(self):
         return f"Delivery Log - {self.event} (HTTP {self.status_code})"
+
+
+from django.db import models
+from django.core.exceptions import ValidationError
+from django.utils import timezone
+import secrets
+
+
+class DocumentGroup(models.Model):
+    """Container for ordered documents with sequential signing."""
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('locked', 'Locked'),
+        ('completed', 'Completed'),
+    ]
+    
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return self.name
+    
+    def can_lock(self):
+        """Check if all items are in draft status."""
+        return all(
+            item.version.status == 'draft'
+            for item in self.items.all()
+        )
+    
+    def lock(self):
+        """Lock all versions in the group."""
+        if not self.can_lock():
+            raise ValidationError("All document versions must be in draft status.")
+        
+        for item in self.items.all():
+            item.version.status = 'locked'
+            item.version.save()
+        
+        self.status = 'locked'
+        self.save()
+    
+    def mark_completed(self):
+        """Mark group as completed."""
+        self.status = 'completed'
+        self.save()
+
+
+class DocumentGroupItem(models.Model):
+    """Ordered document or version within a group."""
+    group = models.ForeignKey(DocumentGroup, on_delete=models.CASCADE, related_name='items')
+    document = models.ForeignKey(Document, on_delete=models.CASCADE)
+    version = models.ForeignKey(DocumentVersion, null=True, blank=True, on_delete=models.SET_NULL)
+    order = models.PositiveIntegerField()
+    
+    class Meta:
+        unique_together = ('group', 'order')
+        ordering = ['order']
+    
+    def __str__(self):
+        return f"{self.group.name} - Doc {self.document.id} v{self.version.version_number} ({self.order})"
+
+
+class GroupSigningSession(models.Model):
+    """Sequential signing session for a group of documents."""
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    group = models.ForeignKey(DocumentGroup, on_delete=models.CASCADE, related_name='signing_sessions')
+    recipient = models.CharField(max_length=255, null=True, blank=True)
+    current_index = models.PositiveIntegerField(default=0)
+    used = models.BooleanField(default=False)
+    revoked = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"GroupSession {self.token[:8]}... - {self.recipient or 'anonymous'}"
+    
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = secrets.token_urlsafe(32)
+        super().save(*args, **kwargs)
+    
+    def is_valid(self):
+        """Check if session is valid for signing."""
+        if self.revoked:
+            return False
+        if self.expires_at and timezone.now() > self.expires_at:
+            return False
+        return True
+    
+    def get_current_item(self):
+        """Get current document group item."""
+        try:
+            return self.group.items.all()[self.current_index]
+        except IndexError:
+            return None
+    
+    def advance(self):
+        """Move to next document in sequence."""
+        self.current_index += 1
+        self.save()
+    
+    def is_complete(self):
+        """Check if all documents have been signed."""
+        return self.current_index >= self.group.items.count()

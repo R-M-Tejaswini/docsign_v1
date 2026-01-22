@@ -1,6 +1,9 @@
 from rest_framework import serializers
 from django.conf import settings
 from .models import Template, TemplateField
+from .models import (
+    TemplateGroup, TemplateGroupItem
+)
 
 
 class TemplateFieldSerializer(serializers.ModelSerializer):
@@ -77,3 +80,47 @@ class TemplateCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Template
         fields = ['title', 'description', 'file']
+
+
+class TemplateGroupItemSerializer(serializers.ModelSerializer):
+    template = TemplateSerializer(read_only=True)
+    template_id = serializers.IntegerField(write_only=True)
+    
+    class Meta:
+        model = TemplateGroupItem
+        fields = ['id', 'template', 'template_id', 'order']
+    
+    def validate_template_id(self, value):
+        from templates.models import Template
+        try:
+            Template.objects.get(id=value)
+        except Template.DoesNotExist:
+            raise serializers.ValidationError("Template not found.")
+        return value
+
+
+class TemplateGroupSerializer(serializers.ModelSerializer):
+    items = TemplateGroupItemSerializer(many=True, read_only=True)
+    template_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
+    
+    class Meta:
+        model = TemplateGroup
+        fields = ['id', 'name', 'description', 'created_at', 'items', 'template_ids']
+        read_only_fields = ['id', 'created_at']
+    
+    def create(self, validated_data):
+        template_ids = validated_data.pop('template_ids', [])
+        group = TemplateGroup.objects.create(**validated_data)
+        
+        for order, template_id in enumerate(template_ids, start=1):
+            TemplateGroupItem.objects.create(
+                group=group,
+                template_id=template_id,
+                order=order
+            )
+        
+        return group

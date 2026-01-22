@@ -4,7 +4,7 @@ from django.conf import settings
 from templates.models import TemplateField
 from .models import (
     Document, DocumentVersion, DocumentField,
-    SigningToken, SignatureEvent, Webhook, WebhookEvent, WebhookDeliveryLog
+    SigningToken, SignatureEvent, Webhook, WebhookEvent, WebhookDeliveryLog, DocumentGroup, DocumentGroupItem, GroupSigningSession
 )
 import secrets
 
@@ -409,3 +409,44 @@ class WebhookSerializer(serializers.ModelSerializer):
         import secrets
         validated_data['secret'] = secrets.token_urlsafe(32)
         return super().create(validated_data)
+    
+class DocumentGroupItemSerializer(serializers.ModelSerializer):
+    document_id = serializers.IntegerField(source='document.id', read_only=True)
+    version_id = serializers.IntegerField(source='version.id', read_only=True)
+    version_number = serializers.IntegerField(source='version.version_number', read_only=True)
+    document_name = serializers.CharField(source='document.name', read_only=True)
+    version_status = serializers.CharField(source='version.status', read_only=True)
+    
+    class Meta:
+        model = DocumentGroupItem
+        fields = ['id', 'order', 'document_id', 'document_name', 'version_id', 'version_number', 'version_status']
+        read_only_fields = ['id', 'document_id', 'document_name', 'version_id', 'version_number', 'version_status']
+
+
+class DocumentGroupSerializer(serializers.ModelSerializer):
+    items = DocumentGroupItemSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = DocumentGroup
+        fields = ['id', 'name', 'description', 'created_at', 'status', 'items']
+        read_only_fields = ['id', 'created_at', 'status', 'items']
+
+
+class GroupSigningSessionSerializer(serializers.ModelSerializer):
+    current_item = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = GroupSigningSession
+        fields = ['id', 'token', 'recipient', 'current_index', 'expires_at', 'created_at', 'current_item', 'is_valid']
+        read_only_fields = ['id', 'token', 'created_at', 'current_index']
+    
+    def get_current_item(self, obj):
+        item = obj.get_current_item()
+        if not item:
+            return None
+        return DocumentGroupItemSerializer(item).data
+    
+    def get_is_valid(self, obj):
+        return obj.is_valid()
+
+

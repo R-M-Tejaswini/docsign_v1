@@ -1,7 +1,12 @@
-from django.urls import path
-from .views import TemplateViewSet
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import TemplateViewSet, TemplateGroupViewSet
 
 app_name = 'templates'
+
+# Router for viewsets
+router = DefaultRouter()
+router.register(r'template-groups', TemplateGroupViewSet, basename='template-group')
 
 urlpatterns = [
     # Template CRUD
@@ -30,4 +35,7 @@ urlpatterns = [
         'patch': 'field_detail',
         'delete': 'field_detail'
     }), name='template-field-detail'),
+
+    # Template Groups - Router URLs
+    path('', include(router.urls)),
 ]

@@ -2,6 +2,8 @@ import os
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+import secrets
 
 
 def template_upload_path(instance, filename):
@@ -112,3 +114,30 @@ class TemplateField(models.Model):
     
     def __str__(self):
         return f"{self.label} ({self.recipient}) - Page {self.page_number}"
+
+
+class TemplateGroup(models.Model):
+    """Container for ordered templates."""
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return self.name
+
+
+class TemplateGroupItem(models.Model):
+    """Ordered template within a group."""
+    group = models.ForeignKey(TemplateGroup, on_delete=models.CASCADE, related_name='items')
+    template = models.ForeignKey('templates.Template', on_delete=models.PROTECT)
+    order = models.PositiveIntegerField()
+    
+    class Meta:
+        unique_together = ('group', 'order')
+        ordering = ['order']
+    
+    def __str__(self):
+        return f"{self.group.name} - {self.template.name} ({self.order})"

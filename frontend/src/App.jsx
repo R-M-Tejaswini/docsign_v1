@@ -6,6 +6,13 @@ import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
 import { WebhooksPage } from './pages/WebhooksPage'
+import { TemplateGroupList } from './pages/TemplateGroupList'
+import { TemplateGroupEdit } from './pages/TemplateGroupEdit'
+import { DocumentGroupList } from './pages/DocumentGroupList'
+import { DocumentGroupCreate } from './pages/DocumentGroupCreate'
+import { DocumentGroupEdit } from './pages/DocumentGroupEdit'
+import { DocumentGroupSignLinks } from './pages/DocumentGroupSignLinks'
+import { GroupSign } from './pages/GroupSign'
 
 function Navigation() {
   const location = useLocation()
@@ -71,11 +78,30 @@ function App() {
         <Navigation />
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/documents" element={<DocumentsList />} />
-          <Route path="/documents/:id" element={<DocumentEdit />} />
+
+          {/* Templates */}
           <Route path="/templates" element={<TemplatesList />} />
-          <Route path="/templates/:id" element={<TemplateEdit />} />
+          <Route path="/templates/:id/edit" element={<TemplateEdit />} />
+
+          {/* Template Groups */}
+          <Route path="/template-groups" element={<TemplateGroupList />} />
+          <Route path="/template-groups/:id/edit" element={<TemplateGroupEdit />} />
+
+          {/* Documents */}
+          <Route path="/documents" element={<DocumentsList />} />
+          <Route path="/documents/:id/edit" element={<DocumentEdit />} />
+
+          {/* Document Groups */}
+          <Route path="/document-groups" element={<DocumentGroupList />} />
+          <Route path="/document-groups/create" element={<DocumentGroupCreate />} />
+          <Route path="/document-groups/:id/edit" element={<DocumentGroupEdit />} />
+          <Route path="/document-groups/:id/sign-links" element={<DocumentGroupSignLinks />} />
+
+          {/* Public Signing */}
           <Route path="/sign/:token" element={<PublicSign />} />
+          <Route path="/group-sign/:token" element={<GroupSign />} />
+
+          {/* Admin */}
           <Route path="/webhooks" element={<WebhooksPage />} />
         </Routes>
       </div>

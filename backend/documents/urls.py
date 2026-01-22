@@ -1,14 +1,21 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from .views import (
     DocumentViewSet,
     SigningTokenViewSet,
     PublicSignViewSet,
     SignatureVerificationViewSet,
     WebhookViewSet,
-    WebhookEventViewSet
+    WebhookEventViewSet,
+    DocumentGroupViewSet,
+    GroupSignView,
 )
 
 app_name = 'documents'
+
+# Router for viewsets
+router = DefaultRouter()
+router.register(r'document-groups', DocumentGroupViewSet, basename='document-group')
 
 urlpatterns = [
     # Document CRUD
@@ -100,10 +107,16 @@ urlpatterns = [
     path('<int:doc_id>/versions/<int:version_id>/audit_export/',
          SignatureVerificationViewSet.as_view({'get': 'audit_export'}),
          name='audit-export'),
-]
-
-# Webhook URLs
-webhook_urls = [
+    
+        # Additional group endpoints
+    path('document-groups/<int:pk>/download/', DocumentGroupViewSet.as_view({
+        'get': 'download'
+    }), name='document-group-download'),
+    
+    path('document-groups/<int:pk>/manifest/', DocumentGroupViewSet.as_view({
+        'get': 'manifest'
+    }), name='document-group-manifest'),
+    
     # Webhooks
     path('webhooks/', WebhookViewSet.as_view({'get': 'list', 'post': 'create'}), name='webhook-list'),
     path('webhooks/<int:pk>/', WebhookViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='webhook-detail'),
@@ -115,6 +128,10 @@ webhook_urls = [
     path('webhook-events/', WebhookEventViewSet.as_view({'get': 'list'}), name='webhook-event-list'),
     path('webhook-events/<int:pk>/', WebhookEventViewSet.as_view({'get': 'retrieve'}), name='webhook-event-detail'),
     path('webhook-events/<int:pk>/logs/', WebhookEventViewSet.as_view({'get': 'logs'}), name='webhook-event-logs'),
+    
+    # Document Groups - Router URLs
+    path('', include(router.urls)),
+    
+    # Public group signing endpoint (no auth)
+    path('group-sign/<str:token>/', GroupSignView.as_view(), name='group-sign'),
 ]
-
-urlpatterns += webhook_urls

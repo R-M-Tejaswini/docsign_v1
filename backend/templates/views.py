@@ -1,13 +1,17 @@
 from django.shortcuts import render, get_object_or_404
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from django.shortcuts import get_object_or_404
+from django.db import transaction
+from django.utils import timezone
+from datetime import timedelta
 
-from .models import Template, TemplateField
+from .models import Template, TemplateField, TemplateGroup, TemplateGroupItem
 from .serializers import (
     TemplateSerializer, TemplateListSerializer,
-    TemplateCreateSerializer, TemplateFieldSerializer
+    TemplateCreateSerializer, TemplateFieldSerializer,  TemplateGroupSerializer, TemplateGroupItemSerializer
 )
 
 
@@ -108,3 +112,53 @@ class TemplateViewSet(viewsets.ModelViewSet):
         # Return full template data with ID
         output_serializer = TemplateSerializer(instance, context={'request': request})
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+class TemplateGroupViewSet(viewsets.ModelViewSet):
+    """Manage template groups and their ordering."""
+    queryset = TemplateGroup.objects.prefetch_related('items__template')
+    serializer_class = TemplateGroupSerializer
+    
+    @action(detail=True, methods=['post'])
+    def add_template(self, request, pk=None):
+        """Add a template to the group."""
+        group = self.get_object()
+        template_id = request.data.get('template_id')
+        
+        if not template_id:
+            return Response({'error': 'template_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Find max order
+        max_order = group.items.aggregate(models.Max('order'))['order__max'] or 0
+        
+        try:
+            item = TemplateGroupItem.objects.create(
+                group=group,
+                template_id=template_id,
+                order=max_order + 1
+            )
+            return Response(
+                TemplateGroupItemSerializer(item).data,
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=True, methods=['patch'])
+    def reorder_items(self, request, pk=None):
+        """Reorder template items in group."""
+        group = self.get_object()
+        new_order = request.data.get('items', [])  # [{id, order}, ...]
+        
+        try:
+            with transaction.atomic():
+                for item_data in new_order:
+                    item = group.items.get(id=item_data['id'])
+                    item.order = item_data['order']
+                    item.save()
+            
+            serializer = self.get_serializer(group)
+            return Response(serializer.data)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
