@@ -1,10 +1,12 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.conf import settings
+from django.db import models
 from templates.models import TemplateField
 from .models import (
     Document, DocumentVersion, DocumentField,
-    SigningToken, SignatureEvent, Webhook, WebhookEvent, WebhookDeliveryLog
+    SigningToken, SignatureEvent, Webhook, WebhookEvent, WebhookDeliveryLog,
+    GroupSession, DocumentGroup, DocumentGroupItem
 )
 import secrets
 
@@ -409,3 +411,329 @@ class WebhookSerializer(serializers.ModelSerializer):
         import secrets
         validated_data['secret'] = secrets.token_urlsafe(32)
         return super().create(validated_data)
+
+
+class GroupSessionSerializer(serializers.ModelSerializer):
+    """Serializer for GroupSession with progress tracking."""
+    progress = serializers.SerializerMethodField()
+    current_item = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = GroupSession
+        fields = [
+            'id', 'group', 'recipient', 'current_index', 'status',
+            'progress', 'current_item', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def get_progress(self, obj):
+        """Return progress dict with completed/total."""
+        return obj.get_progress()
+    
+    def get_current_item(self, obj):
+        """Return serialized current group item."""
+        current = obj.get_current_item()
+        if current:
+            return GroupItemSerializer(current).data
+        return None
+
+
+class GroupItemSerializer(serializers.ModelSerializer):
+    """Serializer for DocumentGroupItem."""
+    version_detail = serializers.SerializerMethodField()
+    document_id = serializers.SerializerMethodField()  # ← ADD THIS
+    
+    class Meta:
+        model = DocumentGroupItem
+        fields = [
+            'id', 'group', 'order', 'title', 'version', 'version_detail',
+            'document_id',  # ← ADD THIS
+            'source', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def get_version_detail(self, obj):
+        """Return basic version info."""
+        return {
+            'id': obj.version.id,
+            'status': obj.version.status,
+            'page_count': obj.version.page_count,
+            'recipients': obj.version.get_recipients(),
+        }
+    
+    def get_document_id(self, obj):
+        """Return the document ID from the version."""
+        return obj.version.document.id  # ← ADD THIS METHOD
+
+
+class GroupItemCreateSerializer(serializers.Serializer):
+    """Serializer for adding an item to a group (multipart/json)."""
+    source = serializers.ChoiceField(choices=['upload', 'template', 'existing'])
+    title = serializers.CharField(max_length=255)
+    
+    # Conditional fields
+    file = serializers.FileField(required=False, allow_null=True)
+    template_id = serializers.IntegerField(required=False, allow_null=True)
+    document_id = serializers.IntegerField(required=False, allow_null=True)
+    
+    def validate(self, data):
+        """Validate required fields based on source."""
+        source = data.get('source')
+        
+        if source == 'upload' and not data.get('file'):
+            raise serializers.ValidationError('file is required for upload source')
+        elif source == 'template' and not data.get('template_id'):
+            raise serializers.ValidationError('template_id is required for template source')
+        elif source == 'existing' and not data.get('document_id'):
+            raise serializers.ValidationError('document_id is required for existing source')
+        
+        return data
+    
+    def create(self, validated_data):
+        """
+        Create a new DocumentGroupItem by creating/copying a DocumentVersion.
+        Returns the created GroupItem (group must be set in view context).
+        """
+        from templates.models import Template
+        
+        group = self.context.get('group')
+        if not group:
+            raise serializers.ValidationError('group must be provided in context')
+        
+        source = validated_data.pop('source')
+        title = validated_data.pop('title')
+        
+        # Determine the next order
+        next_order = group.items.count()
+        
+        if source == 'upload':
+            # Create new Document + DocumentVersion from uploaded file
+            file = validated_data.pop('file')
+            doc = Document.objects.create(
+                title=title,
+                description=f"Group item from {group.title}"
+            )
+            version = DocumentVersion.objects.create(
+                document=doc,
+                file=file,
+                status='draft'
+            )
+        elif source == 'template':
+            # Create new Document + DocumentVersion by copying template
+            template_id = validated_data.pop('template_id')
+            template = Template.objects.get(id=template_id)
+            
+            doc = Document.objects.create(
+                title=title,
+                description=f"Group item from template: {template.title}"
+            )
+            version = DocumentVersion.objects.create(
+                document=doc,
+                file=template.file,
+                status='draft'
+            )
+            
+            # Copy template fields
+            for tfield in template.fields.all():
+                DocumentField.objects.create(
+                    version=version,
+                    field_type=tfield.field_type,
+                    label=tfield.label,
+                    recipient=tfield.recipient,
+                    page_number=tfield.page_number,
+                    x_pct=tfield.x_pct,
+                    y_pct=tfield.y_pct,
+                    width_pct=tfield.width_pct,
+                    height_pct=tfield.height_pct,
+                    required=tfield.required
+                )
+        elif source == 'existing':
+            # Copy latest version from existing document
+            document_id = validated_data.pop('document_id')
+            existing_doc = Document.objects.get(id=document_id)
+            existing_version = existing_doc.versions.order_by('-version_number').first()
+            
+            if not existing_version:
+                raise serializers.ValidationError('Source document has no versions')
+            
+            # Create NEW document for group item (immutable snapshot)
+            doc = Document.objects.create(
+                title=title,
+                description=f"Group item copy of: {existing_doc.title}"
+            )
+            # Create new version by copying
+            version = DocumentVersion.objects.create(
+                document=doc,
+                file=existing_version.file,
+                status='draft'
+            )
+            
+            # Copy all fields
+            for field in existing_version.fields.all():
+                DocumentField.objects.create(
+                    version=version,
+                    field_type=field.field_type,
+                    label=field.label,
+                    recipient=field.recipient,
+                    page_number=field.page_number,
+                    x_pct=field.x_pct,
+                    y_pct=field.y_pct,
+                    width_pct=field.width_pct,
+                    height_pct=field.height_pct,
+                    required=field.required
+                )
+        
+        # Create the group item
+        item = DocumentGroupItem.objects.create(
+            group=group,
+            order=next_order,
+            title=title,
+            version=version,
+            source=source
+        )
+        
+        return item
+
+
+class DocumentGroupSerializer(serializers.ModelSerializer):
+    """Serializer for DocumentGroup detail with items."""
+    recipients = serializers.SerializerMethodField()
+    items = GroupItemSerializer(many=True, read_only=True)
+    item_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = DocumentGroup
+        fields = [
+            'id', 'title', 'description', 'recipients', 'items',
+            'item_count', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'items']
+    
+    def get_recipients(self, obj):
+        """Get all unique recipients across items."""
+        return obj.get_recipients()
+    
+    def get_item_count(self, obj):
+        """Get total number of items."""
+        return obj.get_item_count()
+
+
+class DocumentGroupListSerializer(serializers.ModelSerializer):
+    """Serializer for DocumentGroup list view."""
+    recipients = serializers.SerializerMethodField()
+    item_count = serializers.SerializerMethodField()
+    active_sessions = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = DocumentGroup
+        fields = [
+            'id', 'title', 'description', 'recipients', 'item_count',
+            'active_sessions', 'created_at'
+        ]
+        read_only_fields = fields
+    
+    def get_recipients(self, obj):
+        """Get all unique recipients."""
+        return obj.get_recipients()
+    
+    def get_item_count(self, obj):
+        """Get total items."""
+        return obj.get_item_count()
+    
+    def get_active_sessions(self, obj):
+        """Count active sessions."""
+        return obj.sessions.filter(status__in=['pending', 'in_progress']).count()
+
+
+class GroupSessionCreateSerializer(serializers.Serializer):
+    """Serializer for creating a group session."""
+    recipient = serializers.CharField(max_length=100)
+    expires_in_days = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    
+    def create(self, validated_data):
+        """Create a new GroupSession and generate signing tokens for all items."""
+        from .services import GroupSigningService
+        
+        group = self.context.get('group')
+        if not group:
+            raise serializers.ValidationError('group must be provided in context')
+        
+        recipient = validated_data.get('recipient')
+        expires_in_days = validated_data.get('expires_in_days')
+        
+        # Create session
+        session = GroupSession.objects.create(
+            group=group,
+            recipient=recipient,
+            current_index=0,
+            status='pending'
+        )
+        
+        # Generate tokens for all items using service
+        GroupSigningService.generate_session_tokens(
+            session=session,
+            expires_in_days=expires_in_days
+        )
+        
+        return session
+
+
+class GroupItemReorderSerializer(serializers.Serializer):
+    """Serializer for reordering group items."""
+    new_order = serializers.IntegerField(min_value=0)
+    
+    def validate_new_order(self, value):
+        """Validate new order is within bounds."""
+        group = self.context.get('group')
+        if value >= group.items.count():
+            raise serializers.ValidationError(
+                f'Order must be less than {group.items.count()}'
+            )
+        return value
+    
+    def update(self, instance, validated_data):
+        """Reorder the item and shift others accordingly."""
+        from django.db import models
+        
+        group = instance.group
+        new_order = validated_data['new_order']
+        old_order = instance.order
+        
+        if old_order == new_order:
+            return instance
+        
+        # ✅ FIX: Use a temporary order value to avoid constraint violation
+        temp_order = 99999  # Use a value larger than any real order
+        
+        if old_order < new_order:
+            # Moving down: shift items up
+            # 1. Move dragged item to temp
+            instance.order = temp_order
+            instance.save()
+            
+            # 2. Shift items between old and new positions up
+            group.items.filter(
+                order__gt=old_order,
+                order__lte=new_order
+            ).update(order=models.F('order') - 1)
+            
+            # 3. Move dragged item to final position
+            instance.order = new_order
+            instance.save()
+        else:
+            # Moving up: shift items down
+            # 1. Move dragged item to temp
+            instance.order = temp_order
+            instance.save()
+            
+            # 2. Shift items between new and old positions down
+            group.items.filter(
+                order__gte=new_order,
+                order__lt=old_order
+            ).update(order=models.F('order') + 1)
+            
+            # 3. Move dragged item to final position
+            instance.order = new_order
+            instance.save()
+        
+        return instance

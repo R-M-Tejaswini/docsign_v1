@@ -321,6 +321,21 @@ class SigningToken(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
+    # NEW: Support for group sessions
+    group_session = models.ForeignKey(
+        'GroupSession',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='signing_tokens',
+        help_text="Group session this token belongs to (null for non-group tokens)"
+    )
+    group_index = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Index of the group item for this token (null for non-group tokens)"
+    )
+    
     class Meta:
         ordering = ['-created_at']
         # Ensure only one active sign token per recipient
@@ -633,3 +648,126 @@ class WebhookDeliveryLog(models.Model):
     
     def __str__(self):
         return f"Delivery Log - {self.event} (HTTP {self.status_code})"
+
+
+class DocumentGroup(models.Model):
+    """
+    DocumentGroup represents a sequence of documents to be signed sequentially.
+    Each item in the group is an immutable snapshot version.
+    """
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return self.title
+    
+    def get_recipients(self):
+        """Get all unique recipients across all items in the group."""
+        recipients = set()
+        for item in self.items.all():
+            recipients.update(item.version.get_recipients())
+        return list(recipients)
+    
+    def get_item_count(self):
+        """Get total number of items in group."""
+        return self.items.count()
+
+
+class DocumentGroupItem(models.Model):
+    """
+    DocumentGroupItem represents a single document version in a group sequence.
+    Items are immutable snapshots – the version is locked to this group item.
+    """
+    SOURCE_CHOICES = [
+        ('upload', 'Uploaded PDF'),
+        ('template', 'From Template'),
+        ('existing', 'From Existing Document'),
+    ]
+    
+    group = models.ForeignKey(
+        DocumentGroup,
+        on_delete=models.CASCADE,
+        related_name='items'
+    )
+    order = models.PositiveIntegerField(
+        help_text="Position in group sequence (0-indexed)"
+    )
+    title = models.CharField(max_length=255)
+    version = models.ForeignKey(
+        DocumentVersion,
+        on_delete=models.PROTECT,
+        related_name='group_items',
+        help_text="Immutable snapshot version for this group item"
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        help_text="How this item was added to the group"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['group', 'order'],
+                name='unique_group_item_order'
+            )
+        ]
+    
+    def __str__(self):
+        return f"{self.group.title} - Item {self.order}: {self.title}"
+
+
+class GroupSession(models.Model):
+    """
+    GroupSession tracks signing progress for a recipient through a group.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    group = models.ForeignKey(
+        DocumentGroup,
+        on_delete=models.CASCADE,
+        related_name='sessions'
+    )
+    recipient = models.CharField(max_length=100)
+    current_index = models.PositiveIntegerField(
+        default=0,
+        help_text="Index of the current item (0-based)"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Session {self.id}: {self.group.title} for {self.recipient}"
+    
+    def get_current_item(self):
+        """Get the current group item for this session."""
+        return self.group.items.filter(order=self.current_index).first()
+    
+    def get_progress(self):
+        """Return dict with completed/total counts."""
+        total = self.group.get_item_count()
+        return {
+            'completed': self.current_index,
+            'total': total,
+            'percentage': round((self.current_index / total * 100), 2) if total > 0 else 0
+        }

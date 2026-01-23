@@ -6,6 +6,8 @@ import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
 import { WebhooksPage } from './pages/WebhooksPage'
+import { GroupsList } from './pages/GroupsList'
+import { GroupDetail } from './pages/GroupDetail'
 
 function Navigation() {
   const location = useLocation()
@@ -18,6 +20,7 @@ function Navigation() {
   const navLinks = [
     { to: '/templates', label: 'Templates', icon: '📋' },
     { to: '/documents', label: 'Documents', icon: '📄' },
+    { to: '/groups', label: 'Groups', icon: '📑' },
     { to: '/webhooks', label: 'Webhooks', icon: '🪝' },
   ]
 
@@ -75,6 +78,8 @@ function App() {
           <Route path="/documents/:id" element={<DocumentEdit />} />
           <Route path="/templates" element={<TemplatesList />} />
           <Route path="/templates/:id" element={<TemplateEdit />} />
+          <Route path="/groups" element={<GroupsList />} />
+          <Route path="/groups/:id" element={<GroupDetail />} />
           <Route path="/sign/:token" element={<PublicSign />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
         </Routes>

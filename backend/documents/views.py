@@ -4,10 +4,15 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated  # ✅ ADD IsAuthenticated
-from django.db import transaction
+from django.db import transaction, models
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.pagination import PageNumberPagination
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.db import transaction
+from django.shortcuts import get_object_or_404
 from django.http import HttpResponse
 from io import BytesIO
 from PyPDF2 import PdfReader, PdfWriter
@@ -24,7 +29,7 @@ from django.conf import settings  # ✅ ADD THIS if not present
 
 from .models import (
     Document, DocumentVersion, DocumentField,
-    SigningToken, SignatureEvent, Webhook, WebhookEvent
+    SigningToken, SignatureEvent, Webhook, WebhookEvent, DocumentGroup, GroupSession
 )
 from templates.models import Template
 from .serializers import (
@@ -33,7 +38,12 @@ from .serializers import (
     DocumentFieldSerializer, DocumentFieldUpdateSerializer,
     SigningTokenSerializer, SigningTokenCreateSerializer,
     SignatureEventSerializer, PublicSignPayloadSerializer,
-    PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
+    PublicSignResponseSerializer, WebhookSerializer,
+    WebhookEventSerializer, WebhookDeliveryLogSerializer,
+    DocumentGroupSerializer, GroupSessionSerializer,  # ← ADD THESE
+    DocumentGroupListSerializer, GroupSessionCreateSerializer,
+    GroupItemSerializer, GroupItemCreateSerializer,
+    GroupItemReorderSerializer  # ← ADD THESE
 )
 from .services import get_pdf_flattening_service
 from .services.webhook_service import WebhookService
@@ -485,7 +495,10 @@ class PublicSignViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='sign/(?P<token>[^/.]+)')
     def submit_signature(self, request, token=None):
-        """Submit signature data for a recipient."""
+        """
+        PUBLIC ENDPOINT: Submit signatures for a document.
+        Handles both single documents and group sequences.
+        """
         try:
             signing_token = SigningToken.objects.select_related(
                 'version__document'
@@ -510,6 +523,16 @@ class PublicSignViewSet(viewsets.ViewSet):
                 {'error': 'This is a view-only link'},
                 status=status.HTTP_403_FORBIDDEN
             )
+        
+        # ✅ NEW: Check if this is a group token
+        if signing_token.group_session:
+            session = signing_token.group_session
+            from .services.group_signing_service import GroupSigningService
+            
+            # Validate token matches current session state
+            is_valid, error = GroupSigningService.validate_group_token(signing_token, session)
+            if not is_valid:
+                return Response({'error': error}, status=status.HTTP_403_FORBIDDEN)
         
         # Parse and validate payload
         serializer = PublicSignPayloadSerializer(data=request.data)
@@ -584,7 +607,6 @@ class PublicSignViewSet(viewsets.ViewSet):
                     'recipient': recipient,
                     'fields_signed': len(field_values)
                 }
-                # event_hash is computed by signal after save
             )
             
             # Convert sign token to view-only
@@ -609,6 +631,50 @@ class PublicSignViewSet(viewsets.ViewSet):
                     'ip_address': signature_event.ip_address,
                 }
             )
+            
+            # Prepare response data
+            response_data = {
+                'signature_id': signature_event.id,
+                'message': 'Document signed successfully',
+                'version_status': version.status,
+                'recipient': recipient,
+                'link_converted_to_view': True,
+            }
+            
+            # ✅ NEW: Handle group session advancement
+            if signing_token.group_session:
+                session = signing_token.group_session
+                from .services.group_signing_service import GroupSigningService
+                
+                success, msg, next_token = GroupSigningService.advance_session(session)
+                
+                response_data['group_session_id'] = session.id
+                response_data['group_progress'] = session.get_progress()
+                
+                if success:
+                    response_data['message'] = msg
+                    if next_token:
+                        # Generate public URL for next token
+                        response_data['next_signing_url'] = f"{settings.FRONTEND_BASE_URL}/sign/{next_token.token}"
+                    
+                    # ✅ TRIGGER WEBHOOK: Group Completed (if last item)
+                    if session.status == 'completed':
+                        WebhookService.trigger_event(
+                            event_type='group.completed',
+                            payload={
+                                'group_id': session.group.id,
+                                'group_title': session.group.title,
+                                'recipient': session.recipient,
+                                'session_id': session.id,
+                                'timestamp': timezone.now().isoformat(),
+                                'total_items': session.group.get_item_count(),
+                            }
+                        )
+                else:
+                    return Response(
+                        {'detail': msg},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             
             # ✅ TRIGGER WEBHOOK: Document Completed (if all signed)
             if version.status == 'completed':
@@ -636,79 +702,8 @@ class PublicSignViewSet(viewsets.ViewSet):
                     }
                 )
         
-            response_serializer = PublicSignResponseSerializer({
-            'signature_id': signature_event.id,
-            'message': 'Document signed successfully',
-            'version_status': version.status,
-            'recipient': recipient,
-            'link_converted_to_view': True
-        })
-        
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
+        return Response(response_data, status=status.HTTP_200_OK)
     
-    @staticmethod
-    def get_client_ip(request):
-        """Extract client IP from request."""
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
-
-    def get_recipients(self, obj):
-        """Get list of unique recipients from the model method."""
-        return obj.get_recipients()  # This should already be deduped in the model
-    
-    def flatten_signatures_on_pdf(self, pdf_path, version):
-        """DEPRECATED: Use PDFFlatteningService instead."""
-        service = get_pdf_flattening_service()
-        return service.flatten_version(version)
-    
-    @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
-    def download_public(self, request, token=None):
-        """Download signed PDF from public link."""
-        try:
-            signing_token = SigningToken.objects.select_related('version').get(token=token)
-        except SigningToken.DoesNotExist:
-            return Response({'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
-        
-        version = signing_token.version
-        
-        # Only allow download if completed
-        if version.status != 'completed':
-            return Response(
-                {'error': 'Document is not yet complete'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        try:
-            # Generate or retrieve signed PDF
-            if not version.signed_file:
-                service = get_pdf_flattening_service()
-                service.flatten_and_save(version)
-            
-            # Verify file exists
-            if not version.signed_file or not os.path.exists(version.signed_file.path):
-                return Response(
-                    {'error': 'PDF file not found'},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Stream the file
-            with open(version.signed_file.path, 'rb') as pdf_file:
-                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
-                response['Content-Disposition'] = f'attachment; filename="{version.document.title}_signed.pdf"'
-                return response
-                
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return Response(
-                {'error': f'Failed to generate PDF: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
 
 class SignatureVerificationViewSet(viewsets.ViewSet):
     """ViewSet for signature verification and audit exports."""
@@ -976,3 +971,233 @@ class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
         
         serializer = WebhookDeliveryLogSerializer(logs, many=True)
         return Response(serializer.data)
+    
+class DocumentGroupViewSet(viewsets.ModelViewSet):
+    """ViewSet for DocumentGroup CRUD and session management."""
+    queryset = DocumentGroup.objects.all()
+    serializer_class = DocumentGroupSerializer
+    
+    def get_serializer_class(self):
+        """Use list serializer for list action."""
+        if self.action == 'list':
+            return DocumentGroupListSerializer
+        return DocumentGroupSerializer
+    
+    @action(detail=True, methods=['get'])
+    def items(self, request, pk=None):
+        """Get ordered items in the group."""
+        group = self.get_object()
+        items = group.items.all()
+        serializer = GroupItemSerializer(items, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='items')
+    def add_item(self, request, pk=None):
+        """Add an item to the group."""
+        group = self.get_object()
+        
+        serializer = GroupItemCreateSerializer(
+            data=request.data,
+            context={'group': group}
+        )
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        
+        return Response(
+            GroupItemSerializer(item).data,
+            status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=True, methods=['patch'], url_path='items/(?P<item_id>[0-9]+)/reorder')
+    def reorder_item(self, request, pk=None, item_id=None):
+        """Reorder an item in the group."""
+        group = self.get_object()
+        item = get_object_or_404(group.items, id=item_id)
+        
+        serializer = GroupItemReorderSerializer(
+            item,
+            data=request.data,
+            context={'group': group}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        return Response(GroupItemSerializer(item).data)
+    
+    @action(detail=True, methods=['delete'], url_path='items/(?P<item_id>[0-9]+)')
+    def delete_item(self, request, pk=None, item_id=None):
+        """Delete an item from the group."""
+        from django.db import models
+    
+        group = self.get_object()
+        item = get_object_or_404(group.items, id=item_id)
+        
+        # Prevent deletion if active sessions exist
+        if group.sessions.filter(status__in=['pending', 'in_progress']).exists():
+            return Response(
+                {'detail': 'Cannot delete item while active sessions exist'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ FIX: Use a transaction to ensure order consistency
+        from django.db import transaction
+    
+        try:
+            with transaction.atomic():
+                deleted_order = item.order
+            
+                # 1. Delete the item first
+                item.delete()
+            
+                # 2. Then shift all items AFTER the deleted one down by 1
+                group.items.filter(
+                    order__gt=deleted_order
+                ).update(order=models.F('order') - 1)
+        
+            return Response(status=status.HTTP_204_NO_CONTENT)
+    
+        except Exception as e:
+            return Response(
+                {'detail': f'Failed to delete item: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    # ✅ ADD THESE MISSING ACTIONS
+    @action(detail=True, methods=['get'])
+    def sessions(self, request, pk=None):
+        """Get all sessions for a group."""
+        group = self.get_object()
+        sessions = group.sessions.all().order_by('-created_at')
+        
+        page = self.paginate_queryset(sessions)
+        if page is not None:
+            serializer = GroupSessionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        
+        serializer = GroupSessionSerializer(sessions, many=True)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='sessions')
+    def create_session(self, request, pk=None):
+        """Create a new signing session for the group."""
+        group = self.get_object()
+        
+        # Validate group has items
+        if group.items.count() == 0:
+            return Response(
+                {'detail': 'Group must have at least one item before creating a session'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = GroupSessionCreateSerializer(
+            data=request.data,
+            context={'group': group}
+        )
+        serializer.is_valid(raise_exception=True)
+        session = serializer.save()
+        
+        return Response(
+            GroupSessionSerializer(session).data,
+            status=status.HTTP_201_CREATED
+        )
+    
+    @action(detail=True, methods=['get'], url_path='sessions/(?P<session_id>[0-9]+)')
+    def session_detail(self, request, pk=None, session_id=None):
+        """Get details of a specific session."""
+        group = self.get_object()
+        session = get_object_or_404(group.sessions, id=session_id)
+        
+        serializer = GroupSessionSerializer(session)
+        return Response(serializer.data)
+    
+    @action(detail=True, methods=['post'], url_path='sessions/(?P<session_id>[0-9]+)/revoke')
+    def revoke_session(self, request, pk=None, session_id=None):
+        """Revoke a signing session."""
+        group = self.get_object()
+        session = get_object_or_404(group.sessions, id=session_id)
+        
+        if session.status == 'completed':
+            return Response(
+                {'detail': 'Cannot revoke a completed session'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        session.status = 'cancelled'
+        session.save(update_fields=['status'])
+        
+        # Revoke all tokens for this session
+        from .models import SigningToken
+        SigningToken.objects.filter(group_session=session).update(revoked=True)
+        
+        return Response({
+            'detail': 'Session revoked successfully',
+            'session_id': session.id,
+            'status': session.status
+        })
+    
+    @action(detail=True, methods=['get'], url_path='download')
+    def download_group(self, request, pk=None):
+        """Download all signed documents in a group as ZIP."""
+        group = self.get_object()
+        
+        # Check if group has any completed sessions
+        completed_sessions = group.sessions.filter(status='completed')
+        if not completed_sessions.exists():
+            return Response(
+                {'detail': 'No completed sessions to download'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for item in group.items.all():
+                    version = item.version
+                    
+                    # Only include completed versions
+                    if version.status == 'completed' and version.signed_file:
+                        file_path = version.signed_file.path
+                        if os.path.exists(file_path):
+                            # Create folder structure: Group Title / Document Title
+                            archive_name = f"{group.title}/{item.title}_v{version.version_number}.pdf"
+                            with open(file_path, 'rb') as f:
+                                zipf.writestr(archive_name, f.read())
+                
+                # Add manifest
+                manifest = {
+                    'group_id': group.id,
+                    'group_title': group.title,
+                    'downloaded_at': timezone.now().isoformat(),
+                    'total_items': group.items.count(),
+                    'items': []
+                }
+                
+                for item in group.items.all():
+                    manifest['items'].append({
+                        'order': item.order,
+                        'title': item.title,
+                        'version': item.version.version_number,
+                        'status': item.version.status,
+                        'recipients': item.version.get_recipients(),
+                        'signatures_count': item.version.signatures.count(),
+                    })
+                
+                zipf.writestr('MANIFEST.json', json.dumps(manifest, indent=2))
+            
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="group_{group.title}.zip"'
+            return response
+        
+        except Exception as e:
+            return Response(
+                {'detail': f'Failed to generate download: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def get_client_ip(self, request):
+        """Extract client IP from request."""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            return x_forwarded_for.split(',')[0].strip()
+        return request.META.get('REMOTE_ADDR', '')

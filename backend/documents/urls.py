@@ -5,12 +5,16 @@ from .views import (
     PublicSignViewSet,
     SignatureVerificationViewSet,
     WebhookViewSet,
-    WebhookEventViewSet
+    WebhookEventViewSet,
+    DocumentGroupViewSet
 )
 
 app_name = 'documents'
 
-urlpatterns = [
+# ============================================================================
+# DOCUMENT ROUTES (kept as-is)
+# ============================================================================
+document_patterns = [
     # Document CRUD
     path('', DocumentViewSet.as_view({
         'get': 'list',
@@ -23,7 +27,7 @@ urlpatterns = [
         'delete': 'destroy'
     }), name='document-detail'),
     
-    # Document versions - ALL versions (must come before specific document routes)
+    # Document versions - ALL versions
     path('versions/', DocumentViewSet.as_view({
         'get': 'all_versions'
     }), name='all-document-versions'),
@@ -33,12 +37,10 @@ urlpatterns = [
         'get': 'versions'
     }), name='document-versions'),
     
-    # ⚠️ CRITICAL: Download MUST come BEFORE version_detail
     path('<int:pk>/versions/<int:version_id>/download/', DocumentViewSet.as_view({
         'get': 'download_version'
     }), name='document-version-download'),
     
-    # Generic version detail (catches all <int:version_id>/ patterns)
     path('<int:pk>/versions/<int:version_id>/', DocumentViewSet.as_view({
         'get': 'version_detail'
     }), name='document-version-detail'),
@@ -55,7 +57,6 @@ urlpatterns = [
         'get': 'available_recipients'
     }), name='document-available-recipients'),
     
-    # Document fields
     path('<int:pk>/versions/<int:version_id>/fields/', DocumentViewSet.as_view({
         'post': 'create_field'
     }), name='document-field-create'),
@@ -78,7 +79,7 @@ urlpatterns = [
         'post': 'revoke'
     }), name='token-revoke'),
     
-    # Public signing endpoints (no auth)
+    # Public signing
     path('public/sign/<str:token>/', PublicSignViewSet.as_view({
         'get': 'get_sign_page',
         'post': 'submit_signature'
@@ -88,7 +89,7 @@ urlpatterns = [
         'get': 'download_public'
     }), name='public-download'),
     
-    # Verification & audit endpoints
+    # Signature verification
     path('documents/<int:doc_id>/versions/<int:version_id>/signatures/',
          SignatureVerificationViewSet.as_view({'get': 'list_signatures'}),
          name='signature-list'),
@@ -100,21 +101,94 @@ urlpatterns = [
     path('<int:doc_id>/versions/<int:version_id>/audit_export/',
          SignatureVerificationViewSet.as_view({'get': 'audit_export'}),
          name='audit-export'),
-]
-
-# Webhook URLs
-webhook_urls = [
+    
     # Webhooks
-    path('webhooks/', WebhookViewSet.as_view({'get': 'list', 'post': 'create'}), name='webhook-list'),
-    path('webhooks/<int:pk>/', WebhookViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='webhook-detail'),
-    path('webhooks/<int:pk>/events/', WebhookViewSet.as_view({'get': 'events'}), name='webhook-events'),
-    path('webhooks/<int:pk>/test/', WebhookViewSet.as_view({'post': 'test'}), name='webhook-test'),
-    path('webhooks/<int:pk>/retry/', WebhookViewSet.as_view({'post': 'retry'}), name='webhook-retry'),
+    path('webhooks/', WebhookViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='webhook-list'),
+    
+    path('webhooks/<int:pk>/', WebhookViewSet.as_view({
+        'get': 'retrieve',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='webhook-detail'),
+    
+    path('webhooks/<int:pk>/events/', WebhookViewSet.as_view({
+        'get': 'events'
+    }), name='webhook-events'),
+    
+    path('webhooks/<int:pk>/test/', WebhookViewSet.as_view({
+        'post': 'test'
+    }), name='webhook-test'),
+    
+    path('webhooks/<int:pk>/retry/', WebhookViewSet.as_view({
+        'post': 'retry'
+    }), name='webhook-retry'),
     
     # Webhook Events
-    path('webhook-events/', WebhookEventViewSet.as_view({'get': 'list'}), name='webhook-event-list'),
-    path('webhook-events/<int:pk>/', WebhookEventViewSet.as_view({'get': 'retrieve'}), name='webhook-event-detail'),
-    path('webhook-events/<int:pk>/logs/', WebhookEventViewSet.as_view({'get': 'logs'}), name='webhook-event-logs'),
+    path('webhook-events/', WebhookEventViewSet.as_view({
+        'get': 'list'
+    }), name='webhook-event-list'),
+    
+    path('webhook-events/<int:pk>/', WebhookEventViewSet.as_view({
+        'get': 'retrieve'
+    }), name='webhook-event-detail'),
+    
+    path('webhook-events/<int:pk>/logs/', WebhookEventViewSet.as_view({
+        'get': 'logs'
+    }), name='webhook-event-logs'),
 ]
 
-urlpatterns += webhook_urls
+# ============================================================================
+# ✅ GROUP ROUTES (PREFIXED with 'groups/')
+# ============================================================================
+group_patterns = [
+    # Group CRUD - ✅ NOTE: All prefixed with 'groups/'
+    path('groups/', DocumentGroupViewSet.as_view({
+        'get': 'list',
+        'post': 'create'
+    }), name='group-list'),
+    
+    path('groups/<int:pk>/', DocumentGroupViewSet.as_view({
+        'get': 'retrieve',
+        'patch': 'partial_update',
+        'delete': 'destroy'
+    }), name='group-detail'),
+    
+    # Group Items
+    path('groups/<int:pk>/items/', DocumentGroupViewSet.as_view({
+        'get': 'items',
+        'post': 'add_item'
+    }), name='group-items'),
+    
+    path('groups/<int:pk>/items/<int:item_id>/', DocumentGroupViewSet.as_view({
+        'delete': 'delete_item'
+    }), name='group-item-detail'),
+    
+    path('groups/<int:pk>/items/<int:item_id>/reorder/', DocumentGroupViewSet.as_view({
+        'patch': 'reorder_item'
+    }), name='group-item-reorder'),
+    
+    # Group Sessions
+    path('groups/<int:pk>/sessions/', DocumentGroupViewSet.as_view({
+        'get': 'sessions',
+        'post': 'create_session'
+    }), name='group-sessions'),
+    
+    path('groups/<int:pk>/sessions/<int:session_id>/', DocumentGroupViewSet.as_view({
+        'get': 'session_detail'
+    }), name='group-session-detail'),
+    
+    path('groups/<int:pk>/sessions/<int:session_id>/revoke/', DocumentGroupViewSet.as_view({
+        'post': 'revoke_session'
+    }), name='group-session-revoke'),
+    
+    # Group Download/Export
+    path('groups/<int:pk>/download/', DocumentGroupViewSet.as_view({
+        'get': 'download_group'
+    }), name='group-download'),
+]
+
+# ✅ Combine both pattern lists
+urlpatterns = document_patterns + group_patterns

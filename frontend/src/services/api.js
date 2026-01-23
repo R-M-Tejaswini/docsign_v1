@@ -153,4 +153,30 @@ export const publicAPI = {
     }),
 }
 
+// Group endpoints
+export const groupAPI = {
+  list: () => api.get('/documents/groups/'),
+  create: (data) => api.post('/documents/groups/', data),
+  retrieve: (id) => api.get(`/documents/groups/${id}/`),  // ← ADD THIS
+  get: (id) => api.get(`/documents/groups/${id}/`),  // ← ADD THIS (alias)
+  update: (id, data) => api.patch(`/documents/groups/${id}/`, data),
+  delete: (id) => api.delete(`/documents/groups/${id}/`),
+  
+  // Items
+  listItems: (groupId) => api.get(`/documents/groups/${groupId}/items/`),
+  addItem: (groupId, data) => api.post(`/documents/groups/${groupId}/items/`, data),
+  deleteItem: (groupId, itemId) => api.delete(`/documents/groups/${groupId}/items/${itemId}/`),
+  reorderItem: (groupId, itemId, data) => api.patch(`/documents/groups/${groupId}/items/${itemId}/reorder/`, data),
+  
+  // Sessions
+  listSessions: (groupId) => api.get(`/documents/groups/${groupId}/sessions/`),  // ← ADD THIS
+  getSessions: (groupId) => api.get(`/documents/groups/${groupId}/sessions/`),  // ← ADD THIS (alias)
+  createSession: (groupId, data) => api.post(`/documents/groups/${groupId}/sessions/`, data),
+  getSession: (groupId, sessionId) => api.get(`/documents/groups/${groupId}/sessions/${sessionId}/`),
+  revokeSession: (groupId, sessionId) => api.post(`/documents/groups/${groupId}/sessions/${sessionId}/revoke/`),
+  
+  // Download
+  downloadGroup: (groupId) => api.get(`/documents/groups/${groupId}/download/`, { responseType: 'blob' }),
+}
+
 export default api
