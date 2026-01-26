@@ -49,7 +49,8 @@ class TemplateViewSet(viewsets.ModelViewSet):
     - Centralizes all template-related behavior in one place, mirroring
       the structure used for documents and ensuring predictable API behavior.
     """
-    queryset = Template.objects.all()
+    # Optimization: prefetch fields to avoid N+1 queries when listing/retrieving templates
+    queryset = Template.objects.all().prefetch_related('fields')
     
     def get_parsers(self):
         """

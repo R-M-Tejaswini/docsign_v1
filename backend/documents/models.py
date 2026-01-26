@@ -104,7 +104,7 @@ class DocumentVersion(models.Model):
         help_text="Flattened PDF with all signatures and overlays merged"
     )
     
-    # NEW: Flattened PDF integrity hash
+    # Flattened PDF integrity hash
     signed_pdf_sha256 = models.CharField(
         max_length=64,
         null=True,
@@ -127,6 +127,8 @@ class DocumentVersion(models.Model):
     
     class Meta:
         ordering = ['-version_number']
+        # Ensure version numbers are unique per document
+        unique_together = ['document', 'version_number']
     
     def save(self, *args, **kwargs):
         """
@@ -137,24 +139,25 @@ class DocumentVersion(models.Model):
         - If a file is present, extracts page count using PyPDF2.
 
         Why:
-        - Keeps versioning consistent and avoids relying on calling code to set version numbers.
-        - Ensures page_count reflects the actual PDF pages for positioning fields.
+        - Keeps versioning consistent.
+        - Optimization: We perform file reading (I/O) only on initial creation to avoid blocking.
         """
-        # Auto-set version_number only if it's not already set
-        if not self.version_number or self.version_number == 1:
+        # Auto-set version_number only if it's not already set (Creation time)
+        if not self.pk or not self.version_number:
             last_version = DocumentVersion.objects.filter(
                 document=self.document
             ).order_by('-version_number').first()
             self.version_number = (last_version.version_number + 1) if last_version else 1
         
-        # Extract page count from PDF if file exists
-        if self.file:
-            try:
-                reader = PdfReader(self.file)
-                self.page_count = len(reader.pages)
-            except Exception as e:
-                print(f"Error reading PDF: {e}")
-                self.page_count = 1
+            # Extract page count from PDF only on creation to avoid re-reading file on every save
+            if self.file:
+                try:
+                    with self.file.open('rb') as f:
+                        reader = PdfReader(f)
+                        self.page_count = len(reader.pages)
+                except Exception as e:
+                    print(f"Error reading PDF: {e}")
+                    self.page_count = 1
         
         super().save(*args, **kwargs)
     
@@ -184,17 +187,17 @@ class DocumentVersion(models.Model):
         - Drives both UI progress indicators and business rules (e.g., when the version
           is considered completed).
         """
-        recipients = self.get_recipients()
+        # Optimization: Fetch all fields once to avoid N+1 queries inside the loop
+        all_fields = list(self.fields.all())
+        recipients = set(f.recipient for f in all_fields if f.recipient and f.recipient.strip())
         status = {}
         
-        for recipient in recipients:
-            recipient_fields = self.fields.filter(recipient=recipient)
-            required_fields = recipient_fields.filter(required=True)
+        for recipient in sorted(recipients):
+            recipient_fields = [f for f in all_fields if f.recipient == recipient]
+            required_fields = [f for f in recipient_fields if f.required]
             
-            total = required_fields.count()
-            signed = required_fields.filter(locked=True).exclude(
-                value__isnull=True
-            ).exclude(value='').count()
+            total = len(required_fields)
+            signed = len([f for f in required_fields if f.locked and f.value])
             
             status[recipient] = {
                 'total': total,
@@ -572,7 +575,7 @@ class SignatureEvent(models.Model):
     user_agent = models.TextField(blank=True)
     document_sha256 = models.CharField(max_length=64, help_text="SHA256 hash of PDF at sign time")
     
-    # NEW: Event-level integrity hash
+    # Event-level integrity hash
     event_hash = models.CharField(
         max_length=64,
         null=True,
@@ -616,7 +619,7 @@ class SignatureEvent(models.Model):
             'field_values': sorted(self.field_values, key=lambda x: x['field_id']),
             'signer_name': self.signer_name,
             'recipient': self.recipient,
-            'signed_at': self.signed_at.isoformat(),  # Now safe
+            'signed_at': self.signed_at.isoformat() if self.signed_at else None,
             'token_id': self.token.id if self.token else None,
             'version_id': self.version.id,
         }
@@ -641,6 +644,8 @@ def compute_signature_event_hash(sender, instance, created, **kwargs):
       the event_hash in a post_save ensures signed_at is stable and included in the hash.
     """
     if created and not instance.event_hash:
+        # Refresh to ensure signed_at is populated from DB
+        instance.refresh_from_db()
         instance.event_hash = instance.compute_event_hash()
         instance.save(update_fields=['event_hash'])
 
@@ -669,7 +674,7 @@ class Webhook(models.Model):
     url = models.URLField(
         help_text="External endpoint URL to receive webhook events"
     )
-    # ✅ RENAMED from 'events' to 'subscribed_events'
+    # RENAMED from 'events' to 'subscribed_events'
     subscribed_events = models.JSONField(
         default=list,
         help_text="List of events to subscribe to (e.g., ['document.completed'])"
@@ -677,6 +682,7 @@ class Webhook(models.Model):
     secret = models.CharField(
         max_length=255,
         unique=True,
+        blank=True,
         help_text="Secret key for webhook signature verification (HMAC-SHA256)"
     )
     is_active = models.BooleanField(
@@ -702,6 +708,17 @@ class Webhook(models.Model):
     
     def __str__(self):
         return f"Webhook: {self.url}"
+
+    def save(self, *args, **kwargs):
+        """
+        Auto-generate secret if not present.
+
+        Why:
+        - Ensures that even if created via Admin panel, a secure secret is generated.
+        """
+        if not self.secret:
+            self.secret = secrets.token_urlsafe(50)
+        super().save(*args, **kwargs)
     
     def generate_signature(self, payload: dict) -> str:
         """
@@ -713,14 +730,9 @@ class Webhook(models.Model):
         Why:
         - Consumers can verify payload authenticity using the returned signature.
         """
-        payload_str = json.dumps(payload, sort_keys=True)
-        signature = hashlib.new(
-            'sha256',
-            msg=payload_str.encode(),
-            # hmac usage: hashlib alone won't HMAC; use hmac below to preserve original logic
-        )
-        # Use hmac for correct HMAC. Keep the string signature using hashlib for compatibility.
         import hmac
+        payload_str = json.dumps(payload, sort_keys=True)
+        
         signature = hmac.new(
             self.secret.encode(),
             payload_str.encode(),
@@ -772,7 +784,7 @@ class WebhookEvent(models.Model):
     webhook = models.ForeignKey(
         Webhook,
         on_delete=models.CASCADE,
-        related_name='webhook_events'  # ✅ Explicit related_name to avoid clash
+        related_name='webhook_events'  # Explicit related_name to avoid clash
     )
     event_type = models.CharField(
         max_length=50,
@@ -840,4 +852,3 @@ class WebhookDeliveryLog(models.Model):
     
     def __str__(self):
         return f"Delivery Log - {self.event} (HTTP {self.status_code})"
-

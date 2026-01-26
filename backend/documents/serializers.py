@@ -327,6 +327,7 @@ class DocumentCreateSerializer(serializers.Serializer):
         Why:
         - Keeps version creation logic centralized and guarantees one initial version
           is produced by the serializer (the view relies on this contract).
+        - Optimized with bulk_create to avoid N+1 database queries when copying fields.
         """
         from templates.models import Template
         
@@ -345,20 +346,27 @@ class DocumentCreateSerializer(serializers.Serializer):
                 status='draft'
             )
             
-            # Copy template fields
+            # Optimization: Use bulk_create to copy all template fields in one query
+            # instead of looping through and hitting the DB for each field.
+            fields_to_create = []
             for tfield in template.fields.all():
-                DocumentField.objects.create(
-                    version=version,
-                    field_type=tfield.field_type,
-                    label=tfield.label,
-                    recipient=tfield.recipient,
-                    page_number=tfield.page_number,
-                    x_pct=tfield.x_pct,
-                    y_pct=tfield.y_pct,
-                    width_pct=tfield.width_pct,
-                    height_pct=tfield.height_pct,
-                    required=tfield.required
+                fields_to_create.append(
+                    DocumentField(
+                        version=version,
+                        field_type=tfield.field_type,
+                        label=tfield.label,
+                        recipient=tfield.recipient,
+                        page_number=tfield.page_number,
+                        x_pct=tfield.x_pct,
+                        y_pct=tfield.y_pct,
+                        width_pct=tfield.width_pct,
+                        height_pct=tfield.height_pct,
+                        required=tfield.required
+                    )
                 )
+            if fields_to_create:
+                DocumentField.objects.bulk_create(fields_to_create)
+
         elif file:
             version = DocumentVersion.objects.create(
                 document=document,
@@ -572,7 +580,7 @@ class WebhookSerializer(serializers.ModelSerializer):
 
     What:
     - Serializes webhook core fields and computes derived values like events_list and success_rate.
-    - Auto-generates a secret on creation.
+    - Logic for secret generation is handled in the Model.save() method.
 
     Why:
     - Centralizes webhook creation and exposes helpful derived metadata for admin UIs.
@@ -637,17 +645,3 @@ class WebhookSerializer(serializers.ModelSerializer):
         if obj.total_deliveries == 0:
             return None
         return round((obj.successful_deliveries / obj.total_deliveries) * 100, 2)
-    
-    def create(self, validated_data):
-        """
-        Generate a secret for the webhook on creation and delegate to parent create().
-
-        What:
-        - Uses secrets.token_urlsafe to create a 32-byte URL-safe secret and inserts it into the data.
-
-        Why:
-        - Ensures each webhook has a unique secret for signing payloads or verifying origin.
-        """
-        import secrets
-        validated_data['secret'] = secrets.token_urlsafe(32)
-        return super().create(validated_data)

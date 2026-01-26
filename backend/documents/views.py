@@ -34,7 +34,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import HttpResponse, FileResponse  # ✅ Added FileResponse for streaming
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 
@@ -420,6 +420,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Why:
         - Provides a quick way to branch a version for edits without mutating historical versions.
         - Useful for preparing a new signing cycle while keeping the signed copy intact.
+        - Optimized with bulk_create to avoid N+1 queries.
         """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
@@ -432,20 +433,26 @@ class DocumentViewSet(viewsets.ModelViewSet):
             page_count=version.page_count
         )
         
-        # Copy all fields from the original version
+        # Optimization: Use bulk_create for fields (O(1) query instead of O(N))
+        new_fields = []
         for field in version.fields.all():
-            DocumentField.objects.create(
-                version=new_version,
-                field_type=field.field_type,
-                label=field.label,
-                recipient=field.recipient,
-                page_number=field.page_number,
-                x_pct=field.x_pct,
-                y_pct=field.y_pct,
-                width_pct=field.width_pct,
-                height_pct=field.height_pct,
-                required=field.required
+            new_fields.append(
+                DocumentField(
+                    version=new_version,
+                    field_type=field.field_type,
+                    label=field.label,
+                    recipient=field.recipient,
+                    page_number=field.page_number,
+                    x_pct=field.x_pct,
+                    y_pct=field.y_pct,
+                    width_pct=field.width_pct,
+                    height_pct=field.height_pct,
+                    required=field.required
+                )
             )
+        
+        if new_fields:
+            DocumentField.objects.bulk_create(new_fields)
         
         serializer = DocumentVersionSerializer(new_version, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -457,13 +464,13 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         What:
         - Only allows downloads for versions with status 'completed'.
-        - If a signed_file already exists, streams it directly.
+        - If a signed_file already exists, streams it directly using FileResponse.
         - Otherwise invokes the configured PDFFlatteningService to flatten and save a signed PDF,
           then streams the newly created file.
 
         Why:
         - Users must be able to download a tamper-evident, flattened PDF once the document is completed.
-        - Offloads PDF generation to a service to keep view code focused on HTTP concerns.
+        - FileResponse is used to stream the file instead of loading it into RAM (preventing memory crashes).
         """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
@@ -480,10 +487,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
             if version.signed_file:
                 file_path = version.signed_file.path
                 if os.path.exists(file_path):
-                    with open(file_path, 'rb') as pdf_file:
-                        response = HttpResponse(pdf_file.read(), content_type='application/pdf')
-                        response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
-                        return response
+                    # Optimization: Use FileResponse to stream file from disk
+                    return FileResponse(
+                        open(file_path, 'rb'), 
+                        as_attachment=True, 
+                        filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
+                    )
         
             # If no signed_file or it doesn't exist, generate it
             service = get_pdf_flattening_service()
@@ -497,10 +506,11 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 )
             
             # Stream the newly created file
-            with open(version.signed_file.path, 'rb') as pdf_file:
-                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
-                response['Content-Disposition'] = f'attachment; filename="Document_{document.title}_v{version.version_number}_signed.pdf"'
-                return response
+            return FileResponse(
+                open(version.signed_file.path, 'rb'), 
+                as_attachment=True, 
+                filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
+            )
                 
         except Exception as e:
             import traceback
@@ -745,12 +755,13 @@ class PublicSignViewSet(viewsets.ViewSet):
         - Validates token and scope (must be sign).
         - Validates input payload via PublicSignPayloadSerializer.
         - Ensures fields being signed belong to the recipient and required fields are filled.
-        - Creates SignatureEvent, locks fields, converts token to view-only, updates version status,
-          and triggers webhooks for signature creation and (optionally) document completion.
+        - Creates SignatureEvent, locks fields (using bulk_update), converts token to view-only,
+          updates version status, and triggers webhooks.
 
         Why:
         - Central point ensuring data integrity when anonymous signers submit values.
-        - Transactional: all updates succeed or roll back together to avoid partial state.
+        - Transactional: all updates succeed or roll back together.
+        - Optimized to use bulk_update for fields to prevent N+1 database queries.
         """
         try:
             signing_token = SigningToken.objects.select_related(
@@ -821,14 +832,21 @@ class PublicSignViewSet(viewsets.ViewSet):
         
         # Process signature with transaction
         with transaction.atomic():
-            # Update field values and lock them
-            updated_fields = []
+            # Optimization: Use bulk_update to update fields in one query
+            fields_to_update = []
+            
+            # Create a map for O(1) lookups
+            fields_map = {f.id: f for f in recipient_fields}
+            
             for fv in field_values:
-                field = version.fields.get(id=fv['field_id'])
-                field.value = fv['value']
-                field.locked = True
-                field.save(update_fields=['value', 'locked'])
-                updated_fields.append(field)
+                field = fields_map.get(int(fv['field_id']))
+                if field:
+                    field.value = fv['value']
+                    field.locked = True
+                    fields_to_update.append(field)
+            
+            if fields_to_update:
+                DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
             
             # Compute document hash
             document_sha256 = version.compute_sha256()
@@ -901,7 +919,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                         'audit_export_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/audit_export/',
                     }
                 )
-        
+            
             response_serializer = PublicSignResponseSerializer({
             'signature_id': signature_event.id,
             'message': 'Document signed successfully',
@@ -996,11 +1014,12 @@ class PublicSignViewSet(viewsets.ViewSet):
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Stream the file
-            with open(version.signed_file.path, 'rb') as pdf_file:
-                response = HttpResponse(pdf_file.read(), content_type='application/pdf')
-                response['Content-Disposition'] = f'attachment; filename="{version.document.title}_signed.pdf"'
-                return response
+            # Optimization: Stream the file with FileResponse
+            return FileResponse(
+                open(version.signed_file.path, 'rb'), 
+                as_attachment=True, 
+                filename=f"{version.document.title}_signed.pdf"
+            )
                 
         except Exception as e:
             import traceback
@@ -1109,6 +1128,10 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
         Why:
         - Provides a portable, self-contained audit artifact that can be shared with external auditors
           or stored off-system for long-term verification.
+        
+        Note on Scalability:
+        - Currently builds ZIP in memory. For very large files, this should be moved to a background task
+          that generates the file to S3/Disk and emails a download link to prevent memory issues.
         """
         document = get_object_or_404(Document, id=doc_id)
         version = get_object_or_404(DocumentVersion, id=version_id, document=document)
@@ -1269,13 +1292,14 @@ class WebhookViewSet(viewsets.ModelViewSet):
         }
         
         event = WebhookEvent.objects.create(
-            webhook=webhook,
-            event_type='document.test',
-            payload=test_payload,
-            status='pending'
-        )
+                    webhook=webhook,
+                    event_type='document.test',
+                    payload=test_payload,
+                    status='pending'
+                )
         
         from .services.webhook_service import WebhookService
+        # Optimization: Ideally this should use .delay() with Celery for async processing
         WebhookService.deliver_event(event)
         
         return Response({

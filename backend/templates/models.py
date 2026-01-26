@@ -98,21 +98,33 @@ class Template(models.Model):
         Persist template and compute page count if necessary.
 
         What:
-        - Reads the uploaded PDF to determine page count when not explicitly set.
+        - Reads the uploaded PDF to determine page count ONLY on initial creation.
 
         Why:
-        - Page count is required for validating field placement and ensuring
-          fields do not reference non-existent pages.
+        - Optimization: Counting pages requires opening the file. 
+          We check `if not self.pk` to ensure we only do this expensive operation once.
         """
-        # Extract page count from PDF if not set
-        if self.page_count == 1 and self.file:
+        # Optimization: Only calculate page count on creation (when self.pk is None)
+        # or if page_count is explicitly default/invalid
+        if (not self.pk or self.page_count == 1) and self.file:
             try:
                 from PyPDF2 import PdfReader
+                # Ensure file is open for reading
+                self.file.open('rb')
                 pdf = PdfReader(self.file)
                 self.page_count = len(pdf.pages)
+                
+                # CRITICAL FIX: Rewind the file so Django can read it again when saving to disk.
+                # Do NOT use 'with' block here as it closes the file.
+                self.file.seek(0)
             except Exception as e:
                 print(f"Error reading PDF: {e}")
                 self.page_count = 1
+                # Attempt to reset cursor just in case
+                try:
+                    if self.file: self.file.seek(0)
+                except:
+                    pass
         
         super().save(*args, **kwargs)
     
@@ -190,4 +202,3 @@ class TemplateField(models.Model):
     
     def __str__(self):
         return f"{self.label} ({self.recipient}) - Page {self.page_number}"
-

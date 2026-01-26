@@ -164,8 +164,9 @@ class TemplateListSerializer(serializers.ModelSerializer):
 
         Why:
         - Useful for quick overview and complexity estimation in template lists.
+        - Optimization: Uses 'field_count' annotation if present to avoid N+1 queries.
         """
-        return obj.fields.count()
+        return getattr(obj, 'field_count', obj.fields.count())
     
     def get_recipient_count(self, obj):
         """
