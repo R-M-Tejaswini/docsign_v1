@@ -1,18 +1,50 @@
+"""
+backend/documents/models.py
+
+"""
+
+# ----------------------------
+# Standard library imports
+# ----------------------------
 import os
 import secrets
 import hashlib
-from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
-from django.utils import timezone
-from django.core.exceptions import ValidationError
-from PyPDF2 import PdfReader
+import json
 from datetime import timedelta
 
+# ----------------------------
+# Third-party / external libs
+# ----------------------------
+from PyPDF2 import PdfReader
 
+# ----------------------------
+# Django imports
+# ----------------------------
+from django.db import models
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
+from django.utils import timezone
+
+# ----------------------------
+# Local helpers (none)
+# ----------------------------
+
+
+# ----------------------------
+# File upload helpers
+# ----------------------------
 def document_version_upload_path(instance, filename):
     """
     Generate upload path for document version files.
-    Uses document ID and version number for organization.
+
+    What:
+    - Constructs a predictable storage path using document id and version number.
+
+    Why:
+    - Keeps uploaded files organized in storage and makes it straightforward
+      to find files belonging to a specific document/version.
     """
     # If copying from template, preserve original filename
     # Otherwise use the uploaded filename
@@ -20,10 +52,19 @@ def document_version_upload_path(instance, filename):
     return f'documents/{instance.document_id}/v{instance.version_number}/{filename}'
 
 
+# ----------------------------
+# Core models
+# ----------------------------
 class Document(models.Model):
     """
     Document represents a signing workflow instance.
-    Can be created from a template or uploaded PDF.
+
+    What:
+    - Top-level container for versions and meta information like title/description.
+
+    Why:
+    - Separates the identity of a contract/document from versions which are immutable
+      snapshots used for signing and audit.
     """
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
@@ -40,6 +81,14 @@ class Document(models.Model):
 class DocumentVersion(models.Model):
     """
     A version of a document representing a snapshot at a point in time.
+
+    What:
+    - Holds the uploaded/file-backed PDF, page count, and signing state.
+    - May have a flattened signed_file once signatures are applied.
+
+    Why:
+    - Versions enable immutability for signed artifacts and provide an audit-friendly
+      model around which fields, tokens and events are attached.
     """
     document = models.ForeignKey(
         Document,
@@ -80,7 +129,17 @@ class DocumentVersion(models.Model):
         ordering = ['-version_number']
     
     def save(self, *args, **kwargs):
-        """Compute page count and auto-increment version number."""
+        """
+        Compute page count and auto-increment version number.
+
+        What:
+        - If no prior version exists, version_number becomes 1 otherwise it auto-increments.
+        - If a file is present, extracts page count using PyPDF2.
+
+        Why:
+        - Keeps versioning consistent and avoids relying on calling code to set version numbers.
+        - Ensures page_count reflects the actual PDF pages for positioning fields.
+        """
         # Auto-set version_number only if it's not already set
         if not self.version_number or self.version_number == 1:
             last_version = DocumentVersion.objects.filter(
@@ -100,7 +159,15 @@ class DocumentVersion(models.Model):
         super().save(*args, **kwargs)
     
     def get_recipients(self):
-        """Get list of unique recipients assigned to fields."""
+        """
+        Get list of unique recipients assigned to fields.
+
+        What:
+        - Uses distinct query on the related fields to avoid duplicate recipients.
+
+        Why:
+        - Useful for building recipient-specific UIs, generating tokens, and summarizing status.
+        """
         # Use .distinct() to remove duplicates
         recipients = self.fields.values_list('recipient', flat=True).distinct()
         # Filter out empty strings and sort
@@ -109,7 +176,13 @@ class DocumentVersion(models.Model):
     def get_recipient_status(self):
         """
         Get signing status per recipient.
-        Returns dict: {recipient: {'total': int, 'signed': int, 'completed': bool}}
+
+        Returns:
+        - dict mapping recipient -> {total, signed, completed}
+
+        Why:
+        - Drives both UI progress indicators and business rules (e.g., when the version
+          is considered completed).
         """
         recipients = self.get_recipients()
         status = {}
@@ -134,11 +207,15 @@ class DocumentVersion(models.Model):
     def can_generate_sign_link(self, recipient):
         """
         Check if a sign link can be generated for a specific recipient.
+
         Rules:
         - Document must be locked (not draft)
         - Recipient must have fields assigned
         - Recipient must not have already signed (all their required fields)
         - No active sign token for this recipient
+
+        Returns:
+        - (bool, error_message_or_None)
         """
         if self.status == 'draft':
             return False, "Document must be locked before generating sign links"
@@ -168,13 +245,26 @@ class DocumentVersion(models.Model):
         return True, None
     
     def can_generate_view_link(self):
-        """View links can be generated for any non-draft document."""
+        """
+        View links can be generated for any non-draft document.
+
+        Returns:
+        - (bool, error_message_or_None)
+        """
         if self.status == 'draft':
             return False, "Document must be locked before generating view links"
         return True, None
     
     def compute_sha256(self):
-        """Compute SHA256 hash of the PDF file."""
+        """
+        Compute SHA256 hash of the PDF file.
+
+        What:
+        - Streams file contents to avoid loading entire file into memory.
+
+        Why:
+        - Used to record the document hash at sign time for tamper detection.
+        """
         sha256_hash = hashlib.sha256()
         with self.file.open('rb') as f:
             for byte_block in iter(lambda: f.read(4096), b""):
@@ -182,7 +272,15 @@ class DocumentVersion(models.Model):
         return sha256_hash.hexdigest()
     
     def compute_signed_pdf_hash(self):
-        """Compute SHA256 hash of the signed/flattened PDF file."""
+        """
+        Compute SHA256 hash of the signed/flattened PDF file.
+
+        Returns:
+        - hex digest string or None on error/missing file.
+
+        Why:
+        - Verifies integrity of the flattened PDF distributed to recipients.
+        """
         if not self.signed_file:
             return None
         
@@ -197,17 +295,28 @@ class DocumentVersion(models.Model):
             return None
     
     def update_signed_pdf_hash(self):
-        """Update signed_pdf_sha256 after flattening."""
+        """
+        Update signed_pdf_sha256 field after flattening.
+
+        Why:
+        - Called by PDF flattening workflows to keep metadata in sync with the file.
+        """
         self.signed_pdf_sha256 = self.compute_signed_pdf_hash()
         self.save(update_fields=['signed_pdf_sha256'])
 
     def update_status(self):
         """
         Update document status based on recipient completion.
+
+        Behavior:
         - draft: stays draft until manually locked
-        - locked: just locked, no signatures yet
+        - locked: marked locked when no signatures present
         - partially_signed: some recipients signed, others haven't
         - completed: all recipients completed their required fields
+
+        Side effects:
+        - When moved to 'completed' the code attempts to auto-generate the flattened signed PDF
+          if it does not yet exist.
         """
         if self.status == 'draft':
             return  # Draft stays draft until manually locked
@@ -243,7 +352,14 @@ class DocumentVersion(models.Model):
 class DocumentField(models.Model):
     """
     DocumentField is a field instance on a specific document version.
-    Each field is assigned to a recipient who must fill it.
+
+    What:
+    - Represents form inputs (text, signature, date, checkbox) placed on particular pages/positions.
+    - Fields are assigned to recipients who must fill them prior to completion.
+
+    Why:
+    - Modeling fields separately from versions makes it possible to audit who signed what,
+      reproduce layout, and compute recipient-specific progress.
     """
     FIELD_TYPES = [
         ('text', 'Text'),
@@ -286,7 +402,12 @@ class DocumentField(models.Model):
         return f"{self.label} ({self.recipient}) - {self.version}"
     
     def clean(self):
-        """Validate recipient is assigned."""
+        """
+        Validate recipient is assigned.
+
+        Why:
+        - Ensures every field must target a recipient for the signing workflow to operate.
+        """
         if not self.recipient or not self.recipient.strip():
             raise ValidationError({'recipient': 'Each field must be assigned to a recipient'})
 
@@ -294,8 +415,14 @@ class DocumentField(models.Model):
 class SigningToken(models.Model):
     """
     SigningToken controls access to sign or view a document version.
-    Sign tokens are ALWAYS single-use and tied to a specific recipient.
-    View tokens are unlimited-use and have no recipient.
+
+    What:
+    - Two scopes: 'sign' (single-use tied to a recipient) and 'view' (view-only).
+    - Tracks usage, revocation, and optional expiry.
+
+    Why:
+    - Tokens provide a simple authentication-free mechanism for recipients to sign documents
+      while enabling single-use semantics and auditability.
     """
     SCOPE_CHOICES = [
         ('view', 'View Only'),
@@ -343,7 +470,16 @@ class SigningToken(models.Model):
     
     @classmethod
     def generate_token(cls, version, scope='sign', recipient=None, expires_in_days=None):
-        """Generate a new signing token."""
+        """
+        Generate a new signing token.
+
+        What:
+        - Validates business rules (recipient presence for sign, version readiness).
+        - Generates a secure token and optionally sets expires_at.
+
+        Why:
+        - Keeps token generation logic centralized so callers don't need to remember validation rules.
+        """
         if scope == 'sign':
             if not recipient:
                 raise ValidationError('Sign tokens must specify a recipient')
@@ -371,7 +507,12 @@ class SigningToken(models.Model):
         )
     
     def is_valid(self):
-        """Check if token is valid for use."""
+        """
+        Check if token is valid for use.
+
+        Returns:
+        - (bool, error_message_or_None)
+        """
         if self.revoked:
             return False, "This link has been revoked"
         
@@ -384,7 +525,12 @@ class SigningToken(models.Model):
         return True, None
     
     def convert_to_view_only(self):
-        """Convert a sign token to view-only after signing."""
+        """
+        Convert a sign token to view-only after signing.
+
+        Why:
+        - Marks token as used and changes scope to prevent further signing attempts.
+        """
         if self.scope == 'sign':
             self.scope = 'view'
             self.used = True
@@ -394,7 +540,13 @@ class SigningToken(models.Model):
 class SignatureEvent(models.Model):
     """
     SignatureEvent records each signing action by a recipient.
-    Stores metadata for audit trail and verification.
+
+    What:
+    - Stores signer metadata, the document hash at sign time, event-level hash and field values.
+
+    Why:
+    - Serves as the authoritative audit record for who signed what, when, and from where.
+      Event hashes can be used to detect tampering.
     """
     version = models.ForeignKey(
         DocumentVersion,
@@ -447,7 +599,14 @@ class SignatureEvent(models.Model):
     def compute_event_hash(self):
         """
         Compute tamper-evident hash for this signature event.
-        Called AFTER signed_at is set by auto_now_add.
+
+        What:
+        - Uses stable JSON serialization of a deterministic set of fields
+          (document_sha256, sorted field_values, signer_name, recipient, signed_at, token id, version id).
+
+        Why:
+        - Creating a deterministic event-level hash allows later verification that the
+          event record hasn't been altered after creation.
         """
         import hashlib
         import json
@@ -465,22 +624,40 @@ class SignatureEvent(models.Model):
         hash_string = json.dumps(hash_input, sort_keys=True)
         return hashlib.sha256(hash_string.encode()).hexdigest()
 
-# Signal handler - add OUTSIDE the class
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-from django.utils import timezone
 
+# ----------------------------
+# Signal handlers
+# ----------------------------
 @receiver(post_save, sender=SignatureEvent)
 def compute_signature_event_hash(sender, instance, created, **kwargs):
-    """Compute event_hash after initial creation (when signed_at is populated)."""
+    """
+    Compute event_hash after initial creation (when signed_at is populated).
+
+    What:
+    - On creation, compute and save the event_hash field using compute_event_hash().
+
+    Why:
+    - signed_at is populated by auto_now_add only after the DB write completes; computing
+      the event_hash in a post_save ensures signed_at is stable and included in the hash.
+    """
     if created and not instance.event_hash:
         instance.event_hash = instance.compute_event_hash()
         instance.save(update_fields=['event_hash'])
 
 
+# ----------------------------
+# Webhooks & delivery models
+# ----------------------------
 class Webhook(models.Model):
     """
     Webhook registration for external systems to listen to events.
+
+    What:
+    - Stores endpoint URL, subscribed event types, signing secret and delivery stats.
+
+    Why:
+    - External systems can receive events such as 'document.completed' and verify origin
+      with the HMAC signature generated from the stored secret.
     """
     EVENTS = [
         ('document.signature_created', 'Signature Created'),
@@ -529,11 +706,21 @@ class Webhook(models.Model):
     def generate_signature(self, payload: dict) -> str:
         """
         Generate HMAC-SHA256 signature for webhook payload.
-        External systems can verify the signature to ensure authenticity.
+
+        What:
+        - Serializes payload with stable key order and computes HMAC with stored secret.
+
+        Why:
+        - Consumers can verify payload authenticity using the returned signature.
         """
-        import json
-        import hmac
         payload_str = json.dumps(payload, sort_keys=True)
+        signature = hashlib.new(
+            'sha256',
+            msg=payload_str.encode(),
+            # hmac usage: hashlib alone won't HMAC; use hmac below to preserve original logic
+        )
+        # Use hmac for correct HMAC. Keep the string signature using hashlib for compatibility.
+        import hmac
         signature = hmac.new(
             self.secret.encode(),
             payload_str.encode(),
@@ -542,7 +729,15 @@ class Webhook(models.Model):
         return signature
     
     def increment_delivery_attempt(self, success: bool):
-        """Track delivery statistics."""
+        """
+        Track delivery statistics.
+
+        What:
+        - Updates counters and last_triggered_at timestamp.
+
+        Why:
+        - Provides quick reliability metrics and is used by admin UIs for health checks.
+        """
         self.total_deliveries += 1
         if success:
             self.successful_deliveries += 1
@@ -560,6 +755,12 @@ class Webhook(models.Model):
 class WebhookEvent(models.Model):
     """
     Record of each webhook event fired (for audit trail and debugging).
+
+    What:
+    - Stores payload, event_type, delivery status, retry info and timestamps.
+
+    Why:
+    - Enables reliable retry logic and provides an auditable history of notifications sent.
     """
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -608,6 +809,12 @@ class WebhookEvent(models.Model):
 class WebhookDeliveryLog(models.Model):
     """
     Detailed log of each delivery attempt (for debugging).
+
+    What:
+    - Captures HTTP status, response, error message, duration and timestamp.
+
+    Why:
+    - Essential for debugging failed deliveries and understanding transient errors.
     """
     event = models.ForeignKey(
         WebhookEvent,
@@ -633,3 +840,4 @@ class WebhookDeliveryLog(models.Model):
     
     def __str__(self):
         return f"Delivery Log - {self.event} (HTTP {self.status_code})"
+

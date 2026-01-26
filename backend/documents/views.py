@@ -1,32 +1,50 @@
-from django.shortcuts import render, get_object_or_404
+"""
+backend/documents/views.py
+"""
+
+# ----------------------------
+# Standard library imports
+# ----------------------------
+import io
+import json
+import os
+import traceback
+import zipfile
+from datetime import datetime
+from io import BytesIO
+
+# ----------------------------
+# Third-party / external libs
+# ----------------------------
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework.permissions import AllowAny, IsAuthenticated  # ✅ ADD IsAuthenticated
-from django.db import transaction
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.utils import timezone
+from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+# ----------------------------
+# Django imports
+# ----------------------------
+from django.conf import settings
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.http import HttpResponse
-from io import BytesIO
-from PyPDF2 import PdfReader, PdfWriter
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import letter
-import io
-import traceback
-import os
-import zipfile
-import json
-from datetime import datetime
-from django.conf import settings  # ✅ ADD THIS if not present
+from django.shortcuts import render, get_object_or_404
+from django.utils import timezone
 
-
+# ----------------------------
+# Local app imports
+# ----------------------------
 from .models import (
     Document, DocumentVersion, DocumentField,
     SigningToken, SignatureEvent, Webhook, WebhookEvent
 )
-from templates.models import Template
 from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer,
     DocumentCreateSerializer, DocumentVersionSerializer,
@@ -35,22 +53,62 @@ from .serializers import (
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
+from templates.models import Template
 from .services import get_pdf_flattening_service
 from .services.webhook_service import WebhookService
 
+# ----------------------------
+# Pagination classes
+# ----------------------------
 class StandardResultsSetPagination(PageNumberPagination):
+    """
+    Pagination policy used across document-related list endpoints.
+
+    Why:
+    - Provides a sane default page_size (50) and allows clients to request
+      a larger page up to max_page_size to balance performance vs convenience.
+    - Keeps behavior consistent across endpoints that reuse pagination_class.
+    """
     page_size = 50
     page_size_query_param = 'page_size'
     max_page_size = 1000
 
 
+# ----------------------------
+# Document viewset
+# ----------------------------
 class DocumentViewSet(viewsets.ModelViewSet):
-    """ViewSet for Document CRUD operations."""
+    """
+    ViewSet for Document CRUD operations.
+
+    Responsibilities:
+    - Provide list/retrieve/create/update/delete for Document model.
+    - Offer document-version management endpoints (list versions, lock, copy, download).
+    - Provide endpoints to manage fields within versions (create/update/delete).
+    - Ensure correct parser selection for multipart vs JSON requests.
+    - Ensure only allowed operations are performed depending on version status
+      (draft vs locked vs completed).
+
+    Important constraints (kept as-is):
+    - Serializer create() is expected to create the initial DocumentVersion.
+      create() method does not create a second version; comment in code preserves that behavior.
+    """
     queryset = Document.objects.all()
     pagination_class = StandardResultsSetPagination
     
     def get_parsers(self):
-        """Override parsers based on request method."""
+        """
+        Return parser classes depending on the HTTP method and URL.
+
+        What:
+        - For POST document creation (multipart file upload) we use MultiPartParser/FormParser.
+        - For field creation endpoint we keep JSONParser (fields endpoints expect JSON).
+        - For all other methods we use JSONParser.
+
+        Why:
+        - Different endpoints accept different content types; selecting parsers
+          early ensures DRF will properly parse request.data and file uploads.
+        """
         if self.request.method == 'POST':
             # Check if this is document creation (no nested path) vs field creation
             if not self.request.path.endswith('/fields/'):
@@ -62,7 +120,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return super().get_parsers()
     
     def get_serializer_class(self):
-        """Return appropriate serializer based on action."""
+        """
+        Choose serializer based on current action.
+
+        What:
+        - create -> DocumentCreateSerializer (handles document + initial version creation)
+        - retrieve -> DocumentDetailSerializer (detailed view)
+        - otherwise -> DocumentListSerializer (compact list)
+        """
         if self.action == 'create':
             return DocumentCreateSerializer
         elif self.action == 'retrieve':
@@ -71,7 +136,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return DocumentListSerializer
     
     def create(self, request, *args, **kwargs):
-        """Create a new document, optionally from a template."""
+        """
+        Create a new Document (and its initial version via serializer).
+
+        What:
+        - Validate incoming data using the DocumentCreateSerializer.
+        - Use a transaction to ensure a consistent create operation.
+        - Return the detailed representation after creation.
+
+        Why:
+        - The serializer's create() is expected to fully handle creating the
+          related initial DocumentVersion. The view should not duplicate that logic.
+        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
@@ -86,7 +162,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'])
     def versions(self, request, pk=None):
-        """List all versions of a specific document."""
+        """
+        List versions for a specific document.
+
+        What:
+        - Retrieves all versions belonging to the document instance.
+        - Serializes them with DocumentVersionSerializer.
+
+        Why:
+        - Consumers need an endpoint to enumerate past versions for audit, downloads,
+          or to choose a version to copy/lock/download.
+        """
         document = self.get_object()
         versions = document.versions.all()
         serializer = DocumentVersionSerializer(
@@ -96,7 +182,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def all_versions(self, request):
-        """List all versions across all documents."""
+        """
+        Endpoint to list all document versions across all documents (global view).
+
+        What:
+        - Uses select_related for efficiency and orders by created_at desc.
+        - Supports pagination via pagination_class.
+
+        Why:
+        - Useful for administrative views or audit endpoints that need a global stream
+          of versions rather than versions scoped to a single document.
+        """
         versions = DocumentVersion.objects.select_related('document').order_by('-created_at')
         page = self.paginate_queryset(versions)
         if page is not None:
@@ -112,7 +208,15 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)')
     def version_detail(self, request, pk=None, version_id=None):
-        """Get a specific version of a document."""
+        """
+        Retrieve a single version by ID for a document.
+
+        What:
+        - Fetches the version from document.versions and returns its serialized data.
+
+        Why:
+        - Clients often need to inspect a specific version's metadata and fields.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         serializer = DocumentVersionSerializer(version, context={'request': request})
@@ -120,7 +224,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/lock')
     def lock_version(self, request, pk=None, version_id=None):
-        """Lock a version to prevent further editing."""
+        """
+        Lock a draft version to prevent further edits.
+
+        What:
+        - Ensures only draft versions can be locked.
+        - Validates every field has an assigned recipient before locking.
+        - Changes status to 'locked' and saves.
+
+        Why:
+        - Locking prevents accidental changes and is a precondition for generating
+          sign links and starting the signing process.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -153,7 +268,18 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/recipients')
     def available_recipients(self, request, pk=None, version_id=None):
-        """Get list of recipients who can still receive sign links."""
+        """
+        Return recipient availability and per-recipient status.
+
+        What:
+        - Only allowed for locked versions (drafts are not ready).
+        - Builds a deduplicated list of recipients and reports if they can get sign links,
+          how many fields they have, how many they've signed, and completion status.
+
+        Why:
+        - UI components and automation need to show which recipients still need to sign,
+          whether links can be generated, and reasons for failure when applicable.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -196,7 +322,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['patch'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
     def update_field(self, request, pk=None, version_id=None, field_id=None):
-        """Update a document field (draft mode or value-only in locked mode)."""
+        """
+        Update a single field on a version.
+
+        What:
+        - Accepts partial updates via DocumentFieldUpdateSerializer (partial=True).
+        - Saves changes and returns the updated field representation.
+
+        Why:
+        - During drafting, fields may need label/position/recipient edits.
+        - In locked mode only some properties may be updatable (handled by serializer/field permissions).
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         field = get_object_or_404(version.fields, id=field_id)
@@ -211,7 +347,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/fields')
     def create_field(self, request, pk=None, version_id=None):
-        """Create a new field on a document version (draft mode only)."""
+        """
+        Create a new field on a draft version.
+
+        What:
+        - Only allowed when version.status == 'draft'.
+        - Uses DocumentFieldSerializer to validate and then saves with version relationship.
+
+        Why:
+        - Field creation is part of authoring the signature locations and metadata
+          before locking and sending sign links.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -232,7 +378,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['delete'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
     def delete_field(self, request, pk=None, version_id=None, field_id=None):
-        """Delete a field from a document version (draft mode only)."""
+        """
+        Delete a field from a draft version.
+
+        What:
+        - Only allowed for draft versions and for fields that are not locked (not signed).
+        - Returns HTTP 204 on success.
+
+        Why:
+        - During drafting, authors should be able to remove fields; once signed (locked)
+          they must be preserved for auditability.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         field = get_object_or_404(version.fields, id=field_id)
@@ -254,7 +410,17 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/copy')
     def copy_version(self, request, pk=None, version_id=None):
-        """Create a new draft version by copying an existing version."""
+        """
+        Create a new draft version by copying an existing version.
+
+        What:
+        - Copies the file reference and metadata, creates fields duplicated for the new draft.
+        - Leaves the original version unchanged.
+
+        Why:
+        - Provides a quick way to branch a version for edits without mutating historical versions.
+        - Useful for preparing a new signing cycle while keeping the signed copy intact.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -286,7 +452,19 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/download')
     def download_version(self, request, pk=None, version_id=None):
-        """Download version PDF with flattened signatures."""
+        """
+        Download completed version PDF with flattened signatures.
+
+        What:
+        - Only allows downloads for versions with status 'completed'.
+        - If a signed_file already exists, streams it directly.
+        - Otherwise invokes the configured PDFFlatteningService to flatten and save a signed PDF,
+          then streams the newly created file.
+
+        Why:
+        - Users must be able to download a tamper-evident, flattened PDF once the document is completed.
+        - Offloads PDF generation to a service to keep view code focused on HTTP concerns.
+        """
         document = self.get_object()
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -333,16 +511,48 @@ class DocumentViewSet(viewsets.ModelViewSet):
             )
     
     def flatten_signatures_on_pdf(self, pdf_path, version):
-        """DEPRECATED: Use PDFFlatteningService instead."""
+        """
+        DEPRECATED helper kept for compatibility.
+
+        What:
+        - Delegates to PDFFlatteningService.flatten_version, returns the result.
+
+        Why:
+        - Historically used to flatten PDFs directly in the view; retained for backward
+          compatibility while encouraging use of the service layer.
+        """
         service = get_pdf_flattening_service()
         return service.flatten_version(version)
 
 
+# ----------------------------
+# Signing Token viewset
+# ----------------------------
 class SigningTokenViewSet(viewsets.ViewSet):
-    """ViewSet for managing signing tokens."""
+    """
+    ViewSet for managing signing tokens.
+
+    Responsibilities:
+    - List tokens for a document.
+    - Create tokens bound to document versions.
+    - Revoke tokens.
+
+    Why:
+    - Signing tokens are the mechanism to grant a recipient either signing or view-only access
+      to a specific document version without requiring authentication.
+    """
     
     def list(self, request, document_id=None):
-        """List all tokens for a document."""
+        """
+        List all signing tokens for a given document.
+
+        What:
+        - Uses select_related and prefetch_related to efficiently fetch related version and events.
+        - Returns tokens serialized for client consumption.
+
+        Why:
+        - Administrators or audit UIs need a list of tokens to track distribution and revocation.
+        """
         document = get_object_or_404(Document, id=document_id)
         tokens = SigningToken.objects.filter(
             version__document=document
@@ -354,7 +564,17 @@ class SigningTokenViewSet(viewsets.ViewSet):
         return Response(serializer.data)
     
     def create(self, request, document_id=None, version_id=None):
-        """Create a new signing token for a document version."""
+        """
+        Create a new signing token for a specific document version.
+
+        What:
+        - Validates input using SigningTokenCreateSerializer which expects context={'version': version}.
+        - Handles known validation errors and returns clear 400 messages for invalid input.
+
+        Why:
+        - Token creation is the entry point for generating links for recipients; validation ensures
+          tokens are created only for supported recipients/scopes.
+        """
         document = get_object_or_404(Document, id=document_id)
         version = get_object_or_404(document.versions, id=version_id)
         
@@ -378,7 +598,15 @@ class SigningTokenViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'])
     def revoke(self, request):
-        """Revoke a signing token."""
+        """
+        Revoke a signing token.
+
+        What:
+        - Accepts token string in request.data['token'] and marks the token as revoked.
+
+        Why:
+        - Revocation invalidates previously issued links so they can no longer be used to sign.
+        """
         token_str = request.data.get('token')
         if not token_str:
             return Response(
@@ -402,13 +630,38 @@ class SigningTokenViewSet(viewsets.ViewSet):
             )
 
 
+# ----------------------------
+# Public signing (no auth) viewset
+# ----------------------------
 class PublicSignViewSet(viewsets.ViewSet):
-    """ViewSet for public signing endpoint (no auth required)."""
+    """
+    ViewSet for public signing endpoints.
+
+    Responsibilities:
+    - Provide GET to fetch signing page data for a token (sign or view-only).
+    - Provide POST to submit signatures via a token (only sign scope).
+    - Provide download endpoint for public tokens.
+
+    Why:
+    - Enables external recipients (without an account) to sign documents using a secure token.
+    - This ViewSet is intentionally AllowAny because recipients are unauthenticated users.
+    """
     permission_classes = [AllowAny]
     
     @action(detail=False, methods=['get'], url_path='sign/(?P<token>[^/.]+)')
     def get_sign_page(self, request, token=None):
-        """Retrieve signing page data for a token."""
+        """
+        Retrieve signing page data for the provided token.
+
+        What:
+        - Validates token existence and validity.
+        - Determines which fields are editable for the token's recipient and returns
+          version/fields/signature state necessary for a signing UI.
+
+        Why:
+        - Signing UI needs to know which fields the current token holder can edit,
+          what the version metadata is, and what signatures already exist.
+        """
         try:
             signing_token = SigningToken.objects.select_related(
                 'version__document'
@@ -485,7 +738,20 @@ class PublicSignViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='sign/(?P<token>[^/.]+)')
     def submit_signature(self, request, token=None):
-        """Submit signature data for a recipient."""
+        """
+        Submit signature data for a recipient using a sign token.
+
+        What:
+        - Validates token and scope (must be sign).
+        - Validates input payload via PublicSignPayloadSerializer.
+        - Ensures fields being signed belong to the recipient and required fields are filled.
+        - Creates SignatureEvent, locks fields, converts token to view-only, updates version status,
+          and triggers webhooks for signature creation and (optionally) document completion.
+
+        Why:
+        - Central point ensuring data integrity when anonymous signers submit values.
+        - Transactional: all updates succeed or roll back together to avoid partial state.
+        """
         try:
             signing_token = SigningToken.objects.select_related(
                 'version__document'
@@ -648,7 +914,16 @@ class PublicSignViewSet(viewsets.ViewSet):
     
     @staticmethod
     def get_client_ip(request):
-        """Extract client IP from request."""
+        """
+        Extract client IP from request metadata.
+
+        What:
+        - Checks X-Forwarded-For header first (common when behind proxies/load balancers),
+          falls back to REMOTE_ADDR otherwise.
+
+        Why:
+        - IP is captured for signature events to provide audit trails and tamper detection.
+        """
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
             ip = x_forwarded_for.split(',')[0]
@@ -657,17 +932,43 @@ class PublicSignViewSet(viewsets.ViewSet):
         return ip
 
     def get_recipients(self, obj):
-        """Get list of unique recipients from the model method."""
+        """
+        Helper to return deduplicated recipients list from model method.
+
+        What:
+        - Delegates to model implementation which should already dedupe recipients.
+
+        Why:
+        - Keeps view responsibilities limited (just returns what model provides).
+        """
         return obj.get_recipients()  # This should already be deduped in the model
     
     def flatten_signatures_on_pdf(self, pdf_path, version):
-        """DEPRECATED: Use PDFFlatteningService instead."""
+        """
+        Deprecated compatibility method delegating to PDFFlatteningService.
+
+        What:
+        - Calls service.flatten_version(version)
+
+        Why:
+        - Kept so older integrations that call this helper still function.
+        """
         service = get_pdf_flattening_service()
         return service.flatten_version(version)
     
     @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
     def download_public(self, request, token=None):
-        """Download signed PDF from public link."""
+        """
+        Download a completed signed PDF via a public token.
+
+        What:
+        - Validates token → version → ensures completed status → ensures signed_file exists
+          or requests generation via PDFFlatteningService.
+        - Streams signed PDF to the client.
+
+        Why:
+        - Allows external recipients with a token to retrieve the finalized signed PDF.
+        """
         try:
             signing_token = SigningToken.objects.select_related('version').get(token=token)
         except SigningToken.DoesNotExist:
@@ -710,13 +1011,33 @@ class PublicSignViewSet(viewsets.ViewSet):
             )
 
 
+# ----------------------------
+# Signature verification / audit exports
+# ----------------------------
 class SignatureVerificationViewSet(viewsets.ViewSet):
-    """ViewSet for signature verification and audit exports."""
+    """
+    ViewSet for signature verification and audit exports.
+
+    Responsibilities:
+    - Provide endpoints to list and verify signature events for a given document version.
+    - Produce a ZIP audit export containing signed PDF, MANIFEST.json, and VERIFICATION_REPORT.json.
+
+    Why:
+    - Supports tamper-evidence verification, forensic inspection, and external audits.
+    """
     
     @action(detail=False, methods=['get'], 
             url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures')
     def list_signatures(self, request, doc_id=None, version_id=None):
-        """List all signatures for a document version."""
+        """
+        List all signature events for a version.
+
+        What:
+        - Returns all SignatureEvent objects associated with the version.
+
+        Why:
+        - UIs and audit tools need to enumerate signatures for an event timeline and verification.
+        """
         version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
         signatures = version.signatures.all()
         serializer = SignatureEventSerializer(signatures, many=True)
@@ -725,7 +1046,16 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], 
             url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures/(?P<sig_id>[0-9]+)/verify')
     def verify_signature(self, request, doc_id=None, version_id=None, sig_id=None):
-        """Verify integrity of a specific signature event."""
+        """
+        Verify integrity of a specific signature event.
+
+        What:
+        - Recomputes event hash and document PDF hashes and compares them with stored values.
+        - Also checks signed PDF hash (if present) for tamper detection.
+
+        Why:
+        - Provides a deterministic verification result useful for audits and detecting tampering.
+        """
         version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
         signature = get_object_or_404(SignatureEvent, id=sig_id, version=version)
         
@@ -769,7 +1099,17 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], 
             url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/audit_export')
     def audit_export(self, request, doc_id=None, version_id=None):
-        """Export complete audit package as ZIP."""
+        """
+        Export a complete audit package as a ZIP.
+
+        What:
+        - Assembles signed PDF, MANIFEST.json, and VERIFICATION_REPORT.json into an in-memory ZIP.
+        - Manifest contains metadata and signature entries; verification report contains per-signature validity checks.
+
+        Why:
+        - Provides a portable, self-contained audit artifact that can be shared with external auditors
+          or stored off-system for long-term verification.
+        """
         document = get_object_or_404(Document, id=doc_id)
         version = get_object_or_404(DocumentVersion, id=version_id, document=document)
         
@@ -858,18 +1198,19 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             )
 
 
+# ----------------------------
+# Webhooks management
+# ----------------------------
 class WebhookViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for managing webhooks.
-    
-    Endpoints:
-    - POST /webhooks/               → Create webhook
-    - GET /webhooks/                → List webhooks
-    - GET /webhooks/{id}/           → Retrieve webhook
-    - PATCH /webhooks/{id}/         → Update webhook
-    - DELETE /webhooks/{id}/        → Delete webhook
-    - GET /webhooks/{id}/events/    → List events for webhook
-    - POST /webhooks/{id}/test/     → Send test event
+    ViewSet for managing webhooks (CRUD + events + test + retry).
+
+    Endpoints documented in the class-level docstring remain unchanged.
+    Permission: AllowAny (intentionally set in your provided code).
+
+    Why:
+    - Webhooks allow external systems to be notified about document events like completions
+      and signatures. This ViewSet centralizes creation, listing, testing and retry logic.
     """
     queryset = Webhook.objects.all()
     serializer_class = WebhookSerializer
@@ -877,12 +1218,26 @@ class WebhookViewSet(viewsets.ModelViewSet):
     pagination_class = PageNumberPagination
     
     def get_queryset(self):
-        """Only show active webhooks."""
+        """
+        Return only active webhooks.
+
+        Why:
+        - Prevents showing inactive/disabled webhooks in default listing operations.
+        """
         return Webhook.objects.filter(is_active=True)
     
     @action(detail=True, methods=['get'])
     def events(self, request, pk=None):
-        """List all events for a webhook."""
+        """
+        List events for a given webhook.
+
+        What:
+        - Returns WebhookEvent objects ordered by created_at desc.
+        - Supports pagination.
+
+        Why:
+        - Useful for an admin UI to inspect the delivery history of a particular webhook.
+        """
         webhook = self.get_object()
         events = webhook.webhook_events.all().order_by('-created_at')
         
@@ -896,7 +1251,15 @@ class WebhookViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def test(self, request, pk=None):
-        """Send a test webhook event."""
+        """
+        Send a test webhook event.
+
+        What:
+        - Creates a WebhookEvent with 'document.test' and enqueues delivery via WebhookService.deliver_event.
+
+        Why:
+        - Allows webhook consumers to validate endpoint configuration without real document activity.
+        """
         webhook = self.get_object()
         
         test_payload = {
@@ -923,7 +1286,15 @@ class WebhookViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def retry(self, request, pk=None):
-        """Retry a failed webhook event."""
+        """
+        Retry a failed webhook delivery.
+
+        What:
+        - Accepts event_id in request.data and re-enqueues delivery if event.status == 'failed'.
+
+        Why:
+        - Provides administrators a manual retry mechanism for transient delivery failures.
+        """
         webhook = self.get_object()
         event_id = request.data.get('event_id')
         
@@ -954,9 +1325,15 @@ class WebhookViewSet(viewsets.ModelViewSet):
             )
 
 
+# ----------------------------
+# Webhook Event viewing (read-only)
+# ----------------------------
 class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Read-only endpoints for webhook events.
+    Read-only endpoints for webhook events and their delivery logs.
+
+    Why:
+    - Provides an audit trail of webhook deliveries and logged attempts; intentionally read-only.
     """
     queryset = WebhookEvent.objects.all()
     serializer_class = WebhookEventSerializer
@@ -965,7 +1342,16 @@ class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=True, methods=['get'])
     def logs(self, request, pk=None):
-        """Get delivery logs for a webhook event."""
+        """
+        Get delivery logs for a webhook event.
+
+        What:
+        - Returns associated delivery logs ordered by created_at desc.
+        - Supports pagination.
+
+        Why:
+        - Critical for troubleshooting delivery issues and debugging external integrations.
+        """
         event = self.get_object()
         logs = event.delivery_logs.all().order_by('-created_at')
         
