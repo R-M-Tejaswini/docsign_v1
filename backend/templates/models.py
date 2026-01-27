@@ -34,13 +34,19 @@ def template_upload_path(instance, filename):
 
     What:
     - Builds a deterministic file storage path using the template's ID.
+    - Handles the 'Chicken and Egg' problem: If ID doesn't exist yet (creation),
+      stores in a temporary staging directory.
 
     Why:
     - Keeps template files organized in storage.
-    - Avoids relying on mutable fields like title for file paths.
+    - Prevents files being saved to 'templates/None/...'
     """
-    # Use template ID and preserve original filename
-    return f'templates/{instance.id}/{filename}'
+    if instance.pk:
+        # ID exists (Update or post-save move), use permanent path
+        return f'templates/{instance.pk}/{filename}'
+    else:
+        # ID does not exist (Creation), use temporary staging path
+        return f'templates/temp/{filename}'
 
 
 # ----------------------------
@@ -95,16 +101,18 @@ class Template(models.Model):
     
     def save(self, *args, **kwargs):
         """
-        Persist template and compute page count if necessary.
+        Persist template, compute page count, and organize file storage.
 
         What:
-        - Reads the uploaded PDF to determine page count ONLY on initial creation.
+        1. Reads PDF to count pages (on creation).
+        2. Saves to DB to generate an ID.
+        3. Moves file from 'temp/' to 'templates/<id>/' if needed.
 
         Why:
-        - Optimization: Counting pages requires opening the file. 
-          We check `if not self.pk` to ensure we only do this expensive operation once.
+        - Ensures clean file organization (no 'None' folders).
+        - Optimization: Only counts pages on creation (not updates).
         """
-        # Optimization: Only calculate page count on creation (when self.pk is None)
+        # 1. Optimization: Only calculate page count on creation (when self.pk is None)
         # or if page_count is explicitly default/invalid
         if (not self.pk or self.page_count == 1) and self.file:
             try:
@@ -114,19 +122,43 @@ class Template(models.Model):
                 pdf = PdfReader(self.file)
                 self.page_count = len(pdf.pages)
                 
-                # CRITICAL FIX: Rewind the file so Django can read it again when saving to disk.
-                # Do NOT use 'with' block here as it closes the file.
+                # CRITICAL FIX: Rewind the file so Django can read it again when saving.
                 self.file.seek(0)
             except Exception as e:
                 print(f"Error reading PDF: {e}")
                 self.page_count = 1
-                # Attempt to reset cursor just in case
                 try:
                     if self.file: self.file.seek(0)
                 except:
                     pass
         
+        # Track if this is a new object (no ID yet)
+        is_new = self.pk is None
+        
+        # 2. Save to DB (This generates self.pk)
         super().save(*args, **kwargs)
+        
+        # 3. Post-Save File Move (Move from 'temp' to 'id')
+        if is_new and self.file:
+            old_file_name = self.file.name
+            
+            # Check if it was saved to temp
+            if 'templates/temp' in old_file_name:
+                # Re-opening the file ensures we have the content handle
+                self.file.open('rb')
+                
+                # Re-save the file field. 
+                # Since self.pk now exists, template_upload_path will return 'templates/<id>/...'
+                self.file.save(os.path.basename(old_file_name), self.file, save=False)
+                
+                # Save ONLY the file field to the DB (avoid infinite recursion)
+                super().save(update_fields=['file'])
+                
+                # Cleanup: Delete the old temp file from storage
+                try:
+                    self.file.storage.delete(old_file_name)
+                except Exception as e:
+                    print(f"Warning: Failed to delete temp file {old_file_name}: {e}")
     
     def clean(self):
         """
