@@ -1,3 +1,4 @@
+// frontend/src/components/links/LinksPanel.jsx
 import { useState, useEffect } from 'react'
 import { Button } from '../ui/Button'
 import { useApi } from '../../hooks/useApi'
