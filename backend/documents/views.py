@@ -41,6 +41,7 @@ from django.utils import timezone
 # ----------------------------
 # Local app imports
 # ----------------------------
+from templates.models import Template
 from .models import (
     Document, DocumentVersion, DocumentField,
     SigningToken, SignatureEvent, Webhook, WebhookEvent
@@ -53,8 +54,13 @@ from .serializers import (
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
-from templates.models import Template
-from .services import get_pdf_flattening_service
+
+from .services import (
+    get_document_service, 
+    get_signature_service,
+    get_token_service,
+    get_pdf_flattening_service
+)
 from .services.webhook_service import WebhookService
 
 # ----------------------------
@@ -289,10 +295,10 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        recipient_status = version.get_recipient_status()
-        recipients = version.get_recipients()
+        doc_service = get_document_service()
+        recipient_status = doc_service.get_recipient_status(version)
+        recipients = doc_service.get_recipients(version)
         
-        # Build response with recipient availability - DEDUPLICATED
         available = []
         seen_recipients = set()
         
@@ -303,8 +309,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             seen_recipients.add(recipient)
             status_info = recipient_status.get(recipient, {})
             
-            # Check if recipient can receive a sign link
-            can_generate, error = version.can_generate_sign_link(recipient)
+            can_generate, error = doc_service.can_generate_sign_link(version, recipient)
             
             available.append({
                 'recipient': recipient,
@@ -483,29 +488,24 @@ class DocumentViewSet(viewsets.ModelViewSet):
             )
         
         try:
-            # Check if signed_file exists
             if version.signed_file:
                 file_path = version.signed_file.path
                 if os.path.exists(file_path):
-                    # Optimization: Use FileResponse to stream file from disk
                     return FileResponse(
                         open(file_path, 'rb'), 
                         as_attachment=True, 
                         filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
                     )
         
-            # If no signed_file or it doesn't exist, generate it
             service = get_pdf_flattening_service()
             service.flatten_and_save(version)
             
-            # Verify the file was created
             if not version.signed_file or not os.path.exists(version.signed_file.path):
                 return Response(
                     {'error': 'Failed to generate signed PDF'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
             
-            # Stream the newly created file
             return FileResponse(
                 open(version.signed_file.path, 'rb'), 
                 as_attachment=True, 
@@ -658,6 +658,28 @@ class PublicSignViewSet(viewsets.ViewSet):
     """
     permission_classes = [AllowAny]
     
+    def get_client_ip(self, request):
+        """
+        Extract client IP address from request.
+        
+        Handles X-Forwarded-For header (for proxied requests) and falls back to
+        REMOTE_ADDR if no proxy header is present.
+        
+        Args:
+            request: DRF Request object
+            
+        Returns:
+            str: IP address or None if unable to determine
+        """
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            # X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2, ...)
+            # We want the first one (the original client)
+            ip = x_forwarded_for.split(',')[0].strip()
+            return ip
+        
+        return request.META.get('REMOTE_ADDR')
+    
     @action(detail=False, methods=['get'], url_path='sign/(?P<token>[^/.]+)')
     def get_sign_page(self, request, token=None):
         """
@@ -685,8 +707,8 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Check token validity
-        is_valid, error_message = signing_token.is_valid()
+        token_service = get_token_service()
+        is_valid, error_message = token_service.is_token_valid(signing_token)
         if not is_valid:
             return Response(
                 {
@@ -700,6 +722,7 @@ class PublicSignViewSet(viewsets.ViewSet):
             )
         
         version = signing_token.version
+        doc_service = get_document_service()
         
         try:
             # Determine editable fields based on token scope and recipient
@@ -735,7 +758,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'fields': fields_data,
                 'signatures': signatures_data,
                 'expires_at': signing_token.expires_at,
-                'recipient_status': version.get_recipient_status() if signing_token.recipient else None
+                'recipient_status': doc_service.get_recipient_status(version) if signing_token.recipient else None
             })
         except Exception as e:
             import traceback
@@ -773,8 +796,8 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Validate token
-        is_valid, error_message = signing_token.is_valid()
+        token_service = get_token_service()
+        is_valid, error_message = token_service.is_token_valid(signing_token)
         if not is_valid:
             return Response(
                 {'error': error_message},
@@ -832,10 +855,10 @@ class PublicSignViewSet(viewsets.ViewSet):
         
         # Process signature with transaction
         with transaction.atomic():
-            # Optimization: Use bulk_update to update fields in one query
-            fields_to_update = []
+            doc_service = get_document_service()
+            sig_service = get_signature_service()
             
-            # Create a map for O(1) lookups
+            fields_to_update = []
             fields_map = {f.id: f for f in recipient_fields}
             
             for fv in field_values:
@@ -848,10 +871,8 @@ class PublicSignViewSet(viewsets.ViewSet):
             if fields_to_update:
                 DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
             
-            # Compute document hash
-            document_sha256 = version.compute_sha256()
+            document_sha256 = doc_service.compute_sha256(version)
             
-            # Create signature event (event_hash computed in save())
             signature_event = SignatureEvent.objects.create(
                 version=version,
                 token=signing_token,
@@ -868,14 +889,11 @@ class PublicSignViewSet(viewsets.ViewSet):
                     'recipient': recipient,
                     'fields_signed': len(field_values)
                 }
-                # event_hash is computed by signal after save
             )
             
-            # Convert sign token to view-only
-            signing_token.convert_to_view_only()
+            token_service.convert_to_view_only(signing_token)
             
-            # Update version status based on completion
-            version.update_status()
+            doc_service.update_version_status(version)
             
             # ✅ TRIGGER WEBHOOK: Signature Created
             WebhookService.trigger_event(
@@ -894,7 +912,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                 }
             )
             
-            # ✅ TRIGGER WEBHOOK: Document Completed (if all signed)
+            # ✅ TRIGGER WEBHOOK: Document Completed
             if version.status == 'completed':
                 WebhookService.trigger_event(
                     event_type='document.completed',
@@ -921,111 +939,92 @@ class PublicSignViewSet(viewsets.ViewSet):
                 )
             
             response_serializer = PublicSignResponseSerializer({
-            'signature_id': signature_event.id,
-            'message': 'Document signed successfully',
-            'version_status': version.status,
-            'recipient': recipient,
-            'link_converted_to_view': True
-        })
+                'signature_id': signature_event.id,
+                'message': 'Document signed successfully',
+                'version_status': version.status,
+                'recipient': recipient,
+                'link_converted_to_view': True
+            })
         
         return Response(response_serializer.data, status=status.HTTP_200_OK)
-    
-    @staticmethod
-    def get_client_ip(request):
-        """
-        Extract client IP from request metadata.
-
-        What:
-        - Checks X-Forwarded-For header first (common when behind proxies/load balancers),
-          falls back to REMOTE_ADDR otherwise.
-
-        Why:
-        - IP is captured for signature events to provide audit trails and tamper detection.
-        """
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
-
-    def get_recipients(self, obj):
-        """
-        Helper to return deduplicated recipients list from model method.
-
-        What:
-        - Delegates to model implementation which should already dedupe recipients.
-
-        Why:
-        - Keeps view responsibilities limited (just returns what model provides).
-        """
-        return obj.get_recipients()  # This should already be deduped in the model
-    
-    def flatten_signatures_on_pdf(self, pdf_path, version):
-        """
-        Deprecated compatibility method delegating to PDFFlatteningService.
-
-        What:
-        - Calls service.flatten_version(version)
-
-        Why:
-        - Kept so older integrations that call this helper still function.
-        """
-        service = get_pdf_flattening_service()
-        return service.flatten_version(version)
     
     @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
     def download_public(self, request, token=None):
         """
-        Download a completed signed PDF via a public token.
+        Download the completed signed PDF using a public token.
 
         What:
-        - Validates token → version → ensures completed status → ensures signed_file exists
-          or requests generation via PDFFlatteningService.
-        - Streams signed PDF to the client.
+        - Validates the token exists and is valid (not revoked, not expired).
+        - Only allows downloads if the document version is 'completed'.
+        - Streams the signed PDF file using FileResponse to avoid memory issues.
 
         Why:
-        - Allows external recipients with a token to retrieve the finalized signed PDF.
+        - Recipients need to be able to download the final signed document after all
+          parties have completed signing, using their original token link.
+        - FileResponse streams the file instead of loading it into RAM.
         """
         try:
-            signing_token = SigningToken.objects.select_related('version').get(token=token)
+            signing_token = SigningToken.objects.select_related(
+                'version__document'
+            ).get(token=token)
         except SigningToken.DoesNotExist:
-            return Response({'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {'error': 'Invalid or expired token'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        token_service = get_token_service()
+        is_valid, error_message = token_service.is_token_valid(signing_token)
+        if not is_valid:
+            return Response(
+                {'error': error_message},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         version = signing_token.version
+        document = version.document
         
         # Only allow download if completed
         if version.status != 'completed':
             return Response(
-                {'error': 'Document is not yet complete'},
+                {
+                    'error': 'Document must be completed before downloading',
+                    'current_status': version.status
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            # Generate or retrieve signed PDF
-            if not version.signed_file:
-                service = get_pdf_flattening_service()
-                service.flatten_and_save(version)
+            if version.signed_file:
+                file_path = version.signed_file.path
+                if os.path.exists(file_path):
+                    return FileResponse(
+                        open(file_path, 'rb'),
+                        as_attachment=True,
+                        filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
+                    )
             
-            # Verify file exists
+            # If no signed file exists yet, generate it
+            service = get_pdf_flattening_service()
+            service.flatten_and_save(version)
+            
             if not version.signed_file or not os.path.exists(version.signed_file.path):
                 return Response(
-                    {'error': 'PDF file not found'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {'error': 'Failed to generate signed PDF'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
             
-            # Optimization: Stream the file with FileResponse
             return FileResponse(
-                open(version.signed_file.path, 'rb'), 
-                as_attachment=True, 
-                filename=f"{version.document.title}_signed.pdf"
+                open(version.signed_file.path, 'rb'),
+                as_attachment=True,
+                filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
             )
-                
+        
         except Exception as e:
             import traceback
             traceback.print_exc()
             return Response(
-                {'error': f'Failed to generate PDF: {str(e)}'},
+                {'error': f'Failed to download PDF: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -1048,15 +1047,7 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], 
             url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures')
     def list_signatures(self, request, doc_id=None, version_id=None):
-        """
-        List all signature events for a version.
-
-        What:
-        - Returns all SignatureEvent objects associated with the version.
-
-        Why:
-        - UIs and audit tools need to enumerate signatures for an event timeline and verification.
-        """
+        """List all signature events for a version."""
         version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
         signatures = version.signatures.all()
         serializer = SignatureEventSerializer(signatures, many=True)
@@ -1065,53 +1056,17 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], 
             url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures/(?P<sig_id>[0-9]+)/verify')
     def verify_signature(self, request, doc_id=None, version_id=None, sig_id=None):
-        """
-        Verify integrity of a specific signature event.
-
-        What:
-        - Recomputes event hash and document PDF hashes and compares them with stored values.
-        - Also checks signed PDF hash (if present) for tamper detection.
-
-        Why:
-        - Provides a deterministic verification result useful for audits and detecting tampering.
-        """
+        """Verify integrity of a specific signature event."""
         version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
         signature = get_object_or_404(SignatureEvent, id=sig_id, version=version)
         
-        # Recompute event hash
-        current_event_hash = signature.compute_event_hash()
-        stored_event_hash = signature.event_hash
-        
-        # Check if PDF hash matches
-        current_pdf_hash = version.compute_sha256()
-        stored_pdf_hash = signature.document_sha256
-        
-        # Check if signed PDF hash matches (if available)
-        signed_pdf_valid = True
-        if version.signed_file and version.signed_pdf_sha256:
-            current_signed_pdf_hash = version.compute_signed_pdf_hash()
-            signed_pdf_valid = current_signed_pdf_hash == version.signed_pdf_sha256
-        
-        is_valid = (
-            current_event_hash == stored_event_hash and
-            current_pdf_hash == stored_pdf_hash and
-            signed_pdf_valid
-        )
+        sig_service = get_signature_service()
+        verification_result = sig_service.verify_signature_integrity(signature, version)
         
         return Response({
             'signature_id': signature.id,
-            'valid': is_valid,
-            'verification_details': {
-                'event_hash_match': current_event_hash == stored_event_hash,
-                'stored_event_hash': stored_event_hash,
-                'current_event_hash': current_event_hash,
-                'pdf_hash_match': current_pdf_hash == stored_pdf_hash,
-                'stored_pdf_hash': stored_pdf_hash,
-                'current_pdf_hash': current_pdf_hash,
-                'signed_pdf_hash_match': signed_pdf_valid,
-                'stored_signed_pdf_hash': version.signed_pdf_sha256,
-                'current_signed_pdf_hash': version.compute_signed_pdf_hash() if version.signed_file else None,
-            },
+            'valid': verification_result['valid'],
+            'verification_details': verification_result['details'],
             'signature': SignatureEventSerializer(signature).data
         })
     
@@ -1143,6 +1098,10 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             )
         
         try:
+            # Get services
+            doc_service = get_document_service()
+            sig_service = get_signature_service()
+            
             # Create ZIP in memory
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -1153,6 +1112,8 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                         zipf.writestr(pdf_filename, f.read())
                 
                 # Build verification manifest
+                original_file_sha256 = doc_service.compute_sha256(version)
+                
                 manifest = {
                     'document_id': document.id,
                     'document_title': document.title,
@@ -1160,12 +1121,16 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                     'status': version.status,
                     'exported_at': datetime.now().isoformat(),
                     'signed_pdf_sha256': version.signed_pdf_sha256,
-                    'original_file_sha256': version.compute_sha256(),
+                    'original_file_sha256': original_file_sha256,
                     'signatures': []
                 }
                 
                 # Add all signature events
                 for sig in version.signatures.all():
+                    # Use service to compute event hash
+                    event_hash = sig_service.compute_event_hash(sig)
+                    is_valid = event_hash == sig.event_hash
+                    
                     sig_data = {
                         'id': sig.id,
                         'signer_name': sig.signer_name,
@@ -1176,7 +1141,7 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                         'event_hash': sig.event_hash,
                         'document_sha256': sig.document_sha256,
                         'field_values': sig.field_values,
-                        'is_valid': sig.compute_event_hash() == sig.event_hash
+                        'is_valid': is_valid
                     }
                     manifest['signatures'].append(sig_data)
                 
@@ -1196,7 +1161,9 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                 }
                 
                 for sig in version.signatures.all():
-                    is_valid = sig.compute_event_hash() == sig.event_hash
+                    event_hash = sig_service.compute_event_hash(sig)
+                    is_valid = event_hash == sig.event_hash
+                    
                     verification_report['audit_details'].append({
                         'signature_id': sig.id,
                         'signer': sig.signer_name,
@@ -1215,6 +1182,8 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             return response
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return Response(
                 {'error': f'Failed to generate audit export: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -1377,6 +1346,9 @@ class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
         - Critical for troubleshooting delivery issues and debugging external integrations.
         """
         event = self.get_object()
+        logs = event.delivery_logs.all().order_by('-created_at')
+        
+        page = self.paginate_queryset(logs)
         logs = event.delivery_logs.all().order_by('-created_at')
         
         page = self.paginate_queryset(logs)
