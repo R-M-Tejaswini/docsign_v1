@@ -51,6 +51,17 @@ class Document(models.Model):
     
     def __str__(self):
         return self.title
+    
+    # ✅ NEW: Helper methods for webhook URLs
+    def get_download_url(self, version):
+        """Return the absolute download URL for a version."""
+        from django.conf import settings
+        return f'{settings.BASE_URL}/api/documents/{self.id}/versions/{version.id}/download/'
+    
+    def get_audit_url(self, version):
+        """Return the absolute audit export URL for a version."""
+        from django.conf import settings
+        return f'{settings.BASE_URL}/api/documents/{self.id}/versions/{version.id}/audit_export/'
 
 
 class DocumentVersion(models.Model):

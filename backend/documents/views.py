@@ -27,6 +27,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.exceptions import ValidationError  # ✅ NEW: Import ValidationError
 
 # ----------------------------
 # Django imports
@@ -59,6 +60,7 @@ from .services import (
     get_document_service, 
     get_signature_service,
     get_token_service,
+    get_signing_process_service,  # ✅ NEW: Add this import
     get_pdf_flattening_service
 )
 from .services.webhook_service import WebhookService
@@ -835,17 +837,18 @@ class PublicSignViewSet(viewsets.ViewSet):
         Submit signature data for a recipient using a sign token.
 
         What:
-        - Validates token and scope (must be sign).
-        - Validates input payload via PublicSignPayloadSerializer.
-        - Ensures fields being signed belong to the recipient and required fields are filled.
-        - Creates SignatureEvent, locks fields (using bulk_update), converts token to view-only,
-          updates version status, and triggers webhooks.
+        - Accepts token, signer_name, and field_values in request payload.
+        - Delegates all business logic to SigningProcessService.
+        - Returns response with signature_id and version status.
 
         Why:
-        - Central point ensuring data integrity when anonymous signers submit values.
-        - Transactional: all updates succeed or roll back together.
-        - Optimized to use bulk_update for fields to prevent N+1 database queries.
+        - Thin HTTP layer focused on request/response handling.
+        - All validation, persistence, and webhooks delegated to service layer.
+        - Enables reuse of signature processing logic from other contexts.
+        
+        ✅ CONSOLIDATED: Extracted to SigningProcessService.
         """
+        # Phase 1: Get and validate token
         try:
             signing_token = SigningToken.objects.select_related(
                 'version__document'
@@ -856,157 +859,44 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        token_service = get_token_service()
-        is_valid, error_message = token_service.is_token_valid(signing_token)
-        if not is_valid:
-            return Response(
-                {'error': error_message},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Only sign tokens can submit signatures
-        if signing_token.scope != 'sign':
-            return Response(
-                {'error': 'This is a view-only link'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Parse and validate payload
+        # Phase 2: Parse and validate payload
         serializer = PublicSignPayloadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         signer_name = serializer.validated_data['signer_name']
         field_values = serializer.validated_data['field_values']
         
-        version = signing_token.version
-        recipient = signing_token.recipient
-        
-        # Validate that all fields being signed belong to this recipient
-        field_ids = [fv['field_id'] for fv in field_values]
-        recipient_fields = version.fields.filter(
-            id__in=field_ids,
-            recipient=recipient,
-            locked=False
-        )
-        
-        if recipient_fields.count() != len(field_ids):
-            return Response(
-                {'error': 'Some fields do not belong to this recipient or are already signed'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Validate required fields for this recipient are filled
-        required_recipient_fields = version.fields.filter(
-            recipient=recipient,
-            required=True,
-            locked=False
-        )
-        filled_field_ids = set(field_ids)
-        missing_required = required_recipient_fields.exclude(id__in=filled_field_ids)
-        
-        if missing_required.exists():
-            return Response(
-                {
-                    'error': 'All required fields must be filled',
-                    'missing_fields': list(missing_required.values('id', 'label'))
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Process signature with transaction
-        with transaction.atomic():
-            doc_service = get_document_service()
-            sig_service = get_signature_service()
-            
-            fields_to_update = []
-            fields_map = {f.id: f for f in recipient_fields}
-            
-            for fv in field_values:
-                field = fields_map.get(int(fv['field_id']))
-                if field:
-                    field.value = fv['value']
-                    field.locked = True
-                    fields_to_update.append(field)
-            
-            if fields_to_update:
-                DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
-            
-            document_sha256 = doc_service.compute_sha256(version)
-            
-            signature_event = SignatureEvent.objects.create(
-                version=version,
-                token=signing_token,
-                recipient=recipient,
+        # Phase 3: Delegate to service
+        try:
+            signing_service = get_signing_process_service()
+            result = signing_service.process_signature_submission(
+                signing_token=signing_token,
                 signer_name=signer_name,
+                field_values=field_values,
                 ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                document_sha256=document_sha256,
-                field_values=[
-                    {'field_id': fv['field_id'], 'value': fv['value']}
-                    for fv in field_values
-                ],
-                metadata={
-                    'recipient': recipient,
-                    'fields_signed': len(field_values)
-                }
+                user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            token_service.convert_to_view_only(signing_token)
-            
-            doc_service.update_version_status(version)
-            
-            # ✅ TRIGGER WEBHOOK: Signature Created
-            WebhookService.trigger_event(
-                event_type='document.signature_created',
-                payload={
-                    'document_id': version.document.id,
-                    'document_title': version.document.title,
-                    'version_id': version.id,
-                    'version_number': version.version_number,
-                    'signature_id': signature_event.id,
-                    'signer_name': signer_name,
-                    'recipient': recipient,
-                    'signed_at': signature_event.signed_at.isoformat(),
-                    'field_values': signature_event.field_values,
-                    'ip_address': signature_event.ip_address,
-                }
-            )
-            
-            # ✅ TRIGGER WEBHOOK: Document Completed
-            if version.status == 'completed':
-                WebhookService.trigger_event(
-                    event_type='document.completed',
-                    payload={
-                        'document_id': version.document.id,
-                        'document_title': version.document.title,
-                        'version_id': version.id,
-                        'version_number': version.version_number,
-                        'status': version.status,
-                        'completed_at': timezone.now().isoformat(),
-                        'signatures_count': version.signatures.count(),
-                        'all_signatures': [
-                            {
-                                'id': sig.id,
-                                'signer_name': sig.signer_name,
-                                'recipient': sig.recipient,
-                                'signed_at': sig.signed_at.isoformat(),
-                            }
-                            for sig in version.signatures.all()
-                        ],
-                        'download_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/download/',
-                        'audit_export_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/audit_export/',
-                    }
-                )
-            
-            response_serializer = PublicSignResponseSerializer({
-                'signature_id': signature_event.id,
-                'message': 'Document signed successfully',
-                'version_status': version.status,
-                'recipient': recipient,
-                'link_converted_to_view': True
-            })
+            # Phase 4: Return response
+            response_serializer = PublicSignResponseSerializer(result['response_data'])
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
         
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
+        except ValidationError as e:
+            # Convert Django ValidationError to DRF format
+            if isinstance(e.message_dict, dict):
+                return Response(e.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response(
+                    {'error': str(e.message)},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return Response(
+                {'error': f'Failed to process signature: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
     def download_public(self, request, token=None):
