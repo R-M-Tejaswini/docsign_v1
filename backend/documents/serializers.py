@@ -255,23 +255,103 @@ class DocumentCreateSerializer(serializers.Serializer):
 
 
 class SigningTokenSerializer(serializers.ModelSerializer):
-    """Serializer for SigningToken objects."""
+    """
+    Unified serializer for SigningToken (list, create, retrieve, update).
+    
+    ✅ CONSOLIDATED: Replaces both SigningTokenSerializer and SigningTokenCreateSerializer.
+    
+    Behavior:
+    - For GET (list/retrieve): Returns full token details with computed fields
+    - For POST (create): Accepts scope/recipient/expires_in_days, validates via create()
+    - For PATCH (update): Not commonly used but supported if needed
+    
+    Why:
+    - Single source of truth for token serialization
+    - Reduces code duplication and cognitive load
+    - DRY principle: no need to maintain two similar serializers
+    """
     public_url = serializers.SerializerMethodField()
     signatures = serializers.SerializerMethodField()
     version_id = serializers.IntegerField(source='version.id', read_only=True)
     recipient_status = serializers.SerializerMethodField()
+    
+    # Fields used only during creation
+    scope = serializers.ChoiceField(
+        choices=['view', 'sign'],
+        write_only=False  # Visible in all contexts
+    )
+    recipient = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Recipient identifier for sign tokens (required for sign scope)"
+    )
+    expires_in_days = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+        write_only=True,  # Only visible during creation
+        help_text="Days until token expiry"
+    )
     
     class Meta:
         model = SigningToken
         fields = [
             'id', 'token', 'version_id', 'scope', 'recipient', 'used',
             'revoked', 'expires_at', 'created_at', 'public_url', 
-            'signatures', 'recipient_status'
+            'signatures', 'recipient_status', 'expires_in_days'
         ]
         read_only_fields = [
             'id', 'token', 'used', 'created_at', 'public_url', 
-            'signatures', 'version_id', 'recipient_status'
+            'signatures', 'version_id', 'recipient_status', 'expires_at'
         ]
+    
+    def validate(self, data):
+        """
+        Validate token creation constraints.
+        
+        Only called during POST (create) operations because other fields are read_only.
+        """
+        # Only validate if this is a create operation (no instance)
+        if self.instance is None:
+            scope = data.get('scope')
+            recipient = data.get('recipient')
+            
+            # Sign tokens must have a recipient
+            if scope == 'sign' and not recipient:
+                raise serializers.ValidationError({
+                    'recipient': 'Recipient must be specified for sign links'
+                })
+        
+        return data
+    
+    def create(self, validated_data):
+        """
+        Create a new SigningToken.
+        
+        ✅ CONSOLIDATED: Replaces SigningTokenCreateSerializer.create()
+        
+        Extracts version from context (set by viewset) and delegates to TokenService.
+        """
+        from .services import get_token_service
+        
+        version = self.context.get('version')
+        if not version:
+            raise serializers.ValidationError(
+                'Version context is required to create a token'
+            )
+        
+        expires_in_days = validated_data.pop('expires_in_days', None)
+        
+        service = get_token_service()
+        token = service.generate_token(
+            version=version,
+            scope=validated_data.get('scope', 'view'),
+            recipient=validated_data.get('recipient'),
+            expires_in_days=expires_in_days
+        )
+        return token
     
     def get_public_url(self, obj):
         """Return the frontend URL where the recipient would sign/view the document."""
@@ -301,37 +381,6 @@ class SigningTokenSerializer(serializers.ModelSerializer):
             
             return status.get(obj.recipient, None)
         return None
-
-
-class SigningTokenCreateSerializer(serializers.Serializer):
-    """Serializer for creating SigningToken."""
-    scope = serializers.ChoiceField(choices=['view', 'sign'])
-    recipient = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    expires_in_days = serializers.IntegerField(required=False, allow_null=True, min_value=1)
-    
-    def validate(self, data):
-        """Ensure recipient is provided when creating sign tokens."""
-        if data['scope'] == 'sign' and not data.get('recipient'):
-            raise serializers.ValidationError({
-                'recipient': 'Recipient must be specified for sign links'
-            })
-        return data
-    
-    def create(self, validated_data):
-        """Create and return a SigningToken."""
-        from .services import get_token_service
-        
-        version = self.context.get('version')
-        expires_in_days = validated_data.pop('expires_in_days', None)
-        
-        service = get_token_service()
-        token = service.generate_token(
-            version=version,
-            scope=validated_data['scope'],
-            recipient=validated_data.get('recipient'),
-            expires_in_days=expires_in_days
-        )
-        return token
 
 
 class PublicSignPayloadSerializer(serializers.Serializer):

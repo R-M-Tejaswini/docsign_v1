@@ -5,13 +5,13 @@ Responsibilities:
 - Generate and validate signing tokens
 - Check token availability and expiry
 - Convert tokens between scopes
+
+Uses token_utils for pure utility functions to avoid duplication.
 """
 
 import secrets
-from datetime import timedelta
-from django.utils import timezone
 from django.core.exceptions import ValidationError
-from .token_utils import calculate_expiry  # ✅ IMPORT THE UTILITY
+from .token_utils import calculate_expiry, is_token_expired  # ✅ IMPORT utilities
 
 
 class SigningTokenService:
@@ -55,8 +55,10 @@ class SigningTokenService:
             if not can_generate:
                 raise ValidationError(error)
         
+        # ✅ CONSOLIDATED: Use token_utils for token generation
         token_str = secrets.token_urlsafe(32)
-        # ✅ UPDATED: Use calculate_expiry utility function for consistency
+        
+        # ✅ CONSOLIDATED: Use token_utils for expiry calculation
         expires_at = calculate_expiry(expires_in_days)
         
         return SigningToken.objects.create(
@@ -81,7 +83,8 @@ class SigningTokenService:
         if token.revoked:
             return False, "This link has been revoked"
         
-        if token.expires_at and timezone.now() > token.expires_at:
+        # ✅ CONSOLIDATED: Use token_utils expiry check
+        if is_token_expired(token.expires_at):
             return False, "This link has expired"
         
         if token.scope == 'sign' and token.used:

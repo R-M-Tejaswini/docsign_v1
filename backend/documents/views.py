@@ -50,7 +50,7 @@ from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer,
     DocumentCreateSerializer, DocumentVersionSerializer,
     DocumentFieldSerializer, DocumentFieldUpdateSerializer,
-    SigningTokenSerializer, SigningTokenCreateSerializer,
+    SigningTokenSerializer,
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
@@ -603,6 +603,8 @@ class SigningTokenViewSet(viewsets.ViewSet):
     Why:
     - Signing tokens are the mechanism to grant a recipient either signing or view-only access
       to a specific document version without requiring authentication.
+      
+    ✅ CONSOLIDATED: Now uses a single SigningTokenSerializer for all operations.
     """
     
     def list(self, request, document_id=None):
@@ -621,6 +623,7 @@ class SigningTokenViewSet(viewsets.ViewSet):
             version__document=document
         ).select_related('version').prefetch_related('signature_events')
         
+        # ✅ CONSOLIDATED: Uses single SigningTokenSerializer
         serializer = SigningTokenSerializer(
             tokens, many=True, context={'request': request}
         )
@@ -631,19 +634,23 @@ class SigningTokenViewSet(viewsets.ViewSet):
         Create a new signing token for a specific document version.
 
         What:
-        - Validates input using SigningTokenCreateSerializer which expects context={'version': version}.
+        - Validates input using the unified SigningTokenSerializer.
         - Handles known validation errors and returns clear 400 messages for invalid input.
+        - Delegates actual token generation to TokenService via serializer.create().
 
         Why:
         - Token creation is the entry point for generating links for recipients; validation ensures
           tokens are created only for supported recipients/scopes.
+          
+        ✅ CONSOLIDATED: Now uses single SigningTokenSerializer instead of separate create serializer.
         """
         document = get_object_or_404(Document, id=document_id)
         version = get_object_or_404(document.versions, id=version_id)
         
-        serializer = SigningTokenCreateSerializer(
+        # ✅ CONSOLIDATED: Single serializer for both read and write
+        serializer = SigningTokenSerializer(
             data=request.data,
-            context={'version': version}
+            context={'version': version, 'request': request}
         )
         serializer.is_valid(raise_exception=True)
         
