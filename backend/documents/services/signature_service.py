@@ -6,9 +6,8 @@ Responsibilities:
 - Create and verify signature events
 """
 
-import hashlib
-import json
 from django.utils import timezone
+from .hashing import HashingService
 
 
 class SignatureService:
@@ -19,14 +18,7 @@ class SignatureService:
         """
         Compute tamper-evident hash for a signature event.
         
-        Uses stable JSON serialization of:
-        - document_sha256
-        - field_values (sorted)
-        - signer_name
-        - recipient
-        - signed_at
-        - token id
-        - version id
+        Uses HashingService for stable JSON hashing to ensure consistency.
         
         Args:
             signature_event: SignatureEvent instance
@@ -34,21 +26,8 @@ class SignatureService:
         Returns:
             str: Hexadecimal SHA256 hash
         """
-        hash_input = {
-            'document_sha256': signature_event.document_sha256,
-            'field_values': sorted(
-                signature_event.field_values,
-                key=lambda x: x['field_id']
-            ),
-            'signer_name': signature_event.signer_name,
-            'recipient': signature_event.recipient,
-            'signed_at': signature_event.signed_at.isoformat() if signature_event.signed_at else None,
-            'token_id': signature_event.token.id if signature_event.token else None,
-            'version_id': signature_event.version.id,
-        }
-        
-        hash_string = json.dumps(hash_input, sort_keys=True)
-        return hashlib.sha256(hash_string.encode()).hexdigest()
+        # ✅ UPDATED: Delegate to HashingService instead of inline implementation
+        return HashingService.compute_event_hash(signature_event)
     
     @staticmethod
     def is_signature_valid(signature_event):

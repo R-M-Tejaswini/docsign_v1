@@ -11,6 +11,7 @@ import secrets
 from datetime import timedelta
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from .token_utils import calculate_expiry  # ✅ IMPORT THE UTILITY
 
 
 class SigningTokenService:
@@ -55,9 +56,8 @@ class SigningTokenService:
                 raise ValidationError(error)
         
         token_str = secrets.token_urlsafe(32)
-        expires_at = None
-        if expires_in_days:
-            expires_at = timezone.now() + timedelta(days=expires_in_days)
+        # ✅ UPDATED: Use calculate_expiry utility function for consistency
+        expires_at = calculate_expiry(expires_in_days)
         
         return SigningToken.objects.create(
             token=token_str,

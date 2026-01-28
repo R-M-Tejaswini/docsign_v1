@@ -8,10 +8,10 @@ Responsibilities:
 - Handle version copying
 """
 
-import hashlib
 from django.db import models as django_models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+from .hashing import HashingService
 
 
 class DocumentService:
@@ -133,11 +133,8 @@ class DocumentService:
         Returns:
             str: Hexadecimal SHA256 hash
         """
-        sha256_hash = hashlib.sha256()
-        with version.file.open('rb') as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
+        # ✅ UPDATED: Use HashingService instead of inline implementation
+        return HashingService.compute_file_sha256(version.file)
     
     @staticmethod
     def compute_signed_pdf_hash(version):
@@ -153,12 +150,9 @@ class DocumentService:
         if not version.signed_file:
             return None
         
-        sha256_hash = hashlib.sha256()
         try:
-            with version.signed_file.open('rb') as f:
-                for byte_block in iter(lambda: f.read(4096), b""):
-                    sha256_hash.update(byte_block)
-            return sha256_hash.hexdigest()
+            # ✅ UPDATED: Use HashingService instead of inline implementation
+            return HashingService.compute_file_sha256(version.signed_file)
         except Exception as e:
             print(f"❌ Error computing signed PDF hash: {e}")
             return None

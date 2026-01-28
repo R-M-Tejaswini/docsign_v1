@@ -127,13 +127,31 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
-        """Return deduplicated recipients list."""
+        """
+        Return deduplicated recipients list.
+        
+        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
+        Falls back to service call if not available (backwards compatible).
+        """
+        # Check if viewset pre-computed this
+        if hasattr(obj, '_recipients_cache'):
+            return obj._recipients_cache
+        
         from .services import get_document_service
         service = get_document_service()
         return service.get_recipients(obj)
     
     def get_recipient_status(self, obj):
-        """Return recipient signing status mapping."""
+        """
+        Return recipient signing status mapping.
+        
+        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
+        Falls back to service call if not available (backwards compatible).
+        """
+        # Check if viewset pre-computed this
+        if hasattr(obj, '_recipient_status_cache'):
+            return obj._recipient_status_cache
+        
         from .services import get_document_service
         service = get_document_service()
         return service.get_recipient_status(obj)
@@ -266,11 +284,21 @@ class SigningTokenSerializer(serializers.ModelSerializer):
         return SignatureEventSerializer(signature_events, many=True).data
     
     def get_recipient_status(self, obj):
-        """Return the recipient-specific status mapping."""
+        """
+        Return the recipient-specific status mapping.
+        
+        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
+        Falls back to service call if not available (backwards compatible).
+        """
         if obj.scope == 'sign' and obj.recipient:
-            from .services import get_document_service
-            service = get_document_service()
-            status = service.get_recipient_status(obj.version)
+            # Check if version has cached data
+            if hasattr(obj.version, '_recipient_status_cache'):
+                status = obj.version._recipient_status_cache
+            else:
+                from .services import get_document_service
+                service = get_document_service()
+                status = service.get_recipient_status(obj.version)
+            
             return status.get(obj.recipient, None)
         return None
 

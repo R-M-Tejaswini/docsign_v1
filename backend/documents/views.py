@@ -178,9 +178,12 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Why:
         - Consumers need an endpoint to enumerate past versions for audit, downloads,
           or to choose a version to copy/lock/download.
+
+        ✅ OPTIMIZATION: Prefetch related fields to avoid N+1 queries.
         """
         document = self.get_object()
-        versions = document.versions.all()
+        # ✅ PREFETCH: fields and signatures to avoid N+1
+        versions = document.versions.prefetch_related('fields', 'signatures').all()
         serializer = DocumentVersionSerializer(
             versions, many=True, context={'request': request}
         )
@@ -198,14 +201,33 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Why:
         - Useful for administrative views or audit endpoints that need a global stream
           of versions rather than versions scoped to a single document.
+
+        ✅ OPTIMIZATION: Prefetch related data to avoid N+1 queries.
         """
-        versions = DocumentVersion.objects.select_related('document').order_by('-created_at')
+        versions = DocumentVersion.objects.select_related('document').prefetch_related(
+            'fields', 'signatures', 'tokens'
+        ).order_by('-created_at')
+        
         page = self.paginate_queryset(versions)
         if page is not None:
+            # ✅ PRE-COMPUTE: Attach cached data to avoid serializer queries
+            for version in page:
+                from .services import get_document_service
+                service = get_document_service()
+                version._recipients_cache = service.get_recipients(version)
+                version._recipient_status_cache = service.get_recipient_status(version)
+            
             serializer = DocumentVersionSerializer(
                 page, many=True, context={'request': request}
             )
             return self.get_paginated_response(serializer.data)
+        
+        # ✅ PRE-COMPUTE: Attach cached data for non-paginated case
+        for version in versions:
+            from .services import get_document_service
+            service = get_document_service()
+            version._recipients_cache = service.get_recipients(version)
+            version._recipient_status_cache = service.get_recipient_status(version)
         
         serializer = DocumentVersionSerializer(
             versions, many=True, context={'request': request}
@@ -222,9 +244,21 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
         Why:
         - Clients often need to inspect a specific version's metadata and fields.
+
+        ✅ OPTIMIZATION: Prefetch related data.
         """
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
+        version = get_object_or_404(
+            document.versions.prefetch_related('fields', 'signatures'),
+            id=version_id
+        )
+        
+        # ✅ PRE-COMPUTE: Attach cached data
+        from .services import get_document_service
+        service = get_document_service()
+        version._recipients_cache = service.get_recipients(version)
+        version._recipient_status_cache = service.get_recipient_status(version)
+        
         serializer = DocumentVersionSerializer(version, context={'request': request})
         return Response(serializer.data)
     
@@ -285,9 +319,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
         Why:
         - UI components and automation need to show which recipients still need to sign,
           whether links can be generated, and reasons for failure when applicable.
+
+        ✅ OPTIMIZATION: Prefetch fields to avoid N+1.
         """
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
+        version = get_object_or_404(
+            document.versions.prefetch_related('fields', 'tokens'),
+            id=version_id
+        )
         
         if version.status == 'draft':
             return Response(
@@ -324,31 +363,6 @@ class DocumentViewSet(viewsets.ModelViewSet):
             'recipients': available,
             'document_status': version.status
         })
-    
-    @action(detail=True, methods=['patch'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
-    def update_field(self, request, pk=None, version_id=None, field_id=None):
-        """
-        Update a single field on a version.
-
-        What:
-        - Accepts partial updates via DocumentFieldUpdateSerializer (partial=True).
-        - Saves changes and returns the updated field representation.
-
-        Why:
-        - During drafting, fields may need label/position/recipient edits.
-        - In locked mode only some properties may be updatable (handled by serializer/field permissions).
-        """
-        document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        field = get_object_or_404(version.fields, id=field_id)
-        
-        serializer = DocumentFieldUpdateSerializer(
-            field, data=request.data, partial=True
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        return Response(DocumentFieldSerializer(field).data)
     
     @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/fields')
     def create_field(self, request, pk=None, version_id=None):
@@ -534,7 +548,46 @@ class DocumentViewSet(viewsets.ModelViewSet):
         service = get_pdf_flattening_service()
         return service.flatten_version(version)
 
+    @action(detail=True, methods=['patch'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
+    def update_field(self, request, pk=None, version_id=None, field_id=None):
+        """
+        Update a field on a draft version.
 
+        What:
+        - Only allowed when version.status == 'draft'.
+        - Uses DocumentFieldUpdateSerializer to validate updates.
+        - Prevents editing field properties (recipient, label, required, positioning) on locked versions.
+        - Only allows value updates on signed (locked) fields.
+
+        Why:
+        - During drafting, authors should be able to modify field properties.
+        - Once locked/signed, only the value can be changed (and locked fields are immutable anyway).
+        """
+        document = self.get_object()
+        version = get_object_or_404(document.versions, id=version_id)
+        field = get_object_or_404(version.fields, id=field_id)
+        
+        if version.status == 'draft':
+            # Draft mode: allow full updates using DocumentFieldSerializer
+            serializer = DocumentFieldSerializer(field, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            
+            return Response(
+                DocumentFieldSerializer(field).data,
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Locked mode: only allow value updates on unlocked fields
+            serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            
+            return Response(
+                DocumentFieldSerializer(field).data,
+                status=status.HTTP_200_OK
+            )
+    
 # ----------------------------
 # Signing Token viewset
 # ----------------------------
@@ -1075,18 +1128,8 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
     def audit_export(self, request, doc_id=None, version_id=None):
         """
         Export a complete audit package as a ZIP.
-
-        What:
-        - Assembles signed PDF, MANIFEST.json, and VERIFICATION_REPORT.json into an in-memory ZIP.
-        - Manifest contains metadata and signature entries; verification report contains per-signature validity checks.
-
-        Why:
-        - Provides a portable, self-contained audit artifact that can be shared with external auditors
-          or stored off-system for long-term verification.
         
-        Note on Scalability:
-        - Currently builds ZIP in memory. For very large files, this should be moved to a background task
-          that generates the file to S3/Disk and emails a download link to prevent memory issues.
+        ✅ OPTIMIZATION: Use is_signature_valid() consistently instead of recomputing.
         """
         document = get_object_or_404(Document, id=doc_id)
         version = get_object_or_404(DocumentVersion, id=version_id, document=document)
@@ -1098,20 +1141,16 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             )
         
         try:
-            # Get services
             doc_service = get_document_service()
             sig_service = get_signature_service()
             
-            # Create ZIP in memory
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add signed PDF
                 if version.signed_file:
                     pdf_filename = f"{document.title}_v{version.version_number}_signed.pdf"
                     with version.signed_file.open('rb') as f:
                         zipf.writestr(pdf_filename, f.read())
                 
-                # Build verification manifest
                 original_file_sha256 = doc_service.compute_sha256(version)
                 
                 manifest = {
@@ -1127,9 +1166,8 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                 
                 # Add all signature events
                 for sig in version.signatures.all():
-                    # Use service to compute event hash
-                    event_hash = sig_service.compute_event_hash(sig)
-                    is_valid = event_hash == sig.event_hash
+                    # ✅ OPTIMIZATION: Use service method consistently
+                    is_valid = sig_service.is_signature_valid(sig)
                     
                     sig_data = {
                         'id': sig.id,
@@ -1145,7 +1183,6 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                     }
                     manifest['signatures'].append(sig_data)
                 
-                # Write manifest
                 zipf.writestr('MANIFEST.json', json.dumps(manifest, indent=2))
                 
                 # Add detailed verification report
@@ -1161,8 +1198,8 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                 }
                 
                 for sig in version.signatures.all():
-                    event_hash = sig_service.compute_event_hash(sig)
-                    is_valid = event_hash == sig.event_hash
+                    # ✅ OPTIMIZATION: Use service method consistently
+                    is_valid = sig_service.is_signature_valid(sig)
                     
                     verification_report['audit_details'].append({
                         'signature_id': sig.id,

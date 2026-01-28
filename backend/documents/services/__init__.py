@@ -1,4 +1,4 @@
-from .hashing import compute_file_sha256
+from .hashing import compute_file_sha256, HashingService, get_hashing_service
 from .token_utils import generate_secure_token, calculate_expiry
 from .pdf_flattening import get_pdf_flattening_service
 from .document_service import DocumentService, get_document_service
@@ -8,6 +8,8 @@ from .webhook_service import WebhookService
 
 __all__ = [
     'compute_file_sha256',
+    'HashingService',
+    'get_hashing_service',
     'generate_secure_token',
     'calculate_expiry',
     'get_pdf_flattening_service',
