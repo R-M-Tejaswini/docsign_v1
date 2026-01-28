@@ -1,5 +1,6 @@
+// frontend/src/pages/DocumentEdit.jsx
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom' // ✅ Added useSearchParams
 import { DocumentViewer } from '../components/pdf/DocumentViewer'
 import { PageLayer } from '../components/pdf/PageLayer'
 import { FieldPalette } from '../components/fields/FieldPalette'
@@ -15,6 +16,12 @@ import { AuditTrailPanel } from '../components/audit/AuditTrailPanel'
 export const DocumentEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams() // ✅ Retrieve query params
+  
+  // ✅ Detect Group Mode
+  const groupId = searchParams.get('groupId')
+  const isGroupMode = !!groupId
+
   const [documentData, setDocumentData] = useState(null)
   const [documentTitle, setDocumentTitle] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -111,7 +118,10 @@ export const DocumentEdit = () => {
       const updatedVersion = await lockVersion()
       setVersion(updatedVersion)
       addToast('Version locked successfully', 'success')
-      setActiveTab('links')
+      // ✅ In Group Mode, stay on fields (don't switch to links tab)
+      if (!isGroupMode) {
+        setActiveTab('links')
+      }
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Failed to lock version'
       addToast(errorMsg, 'error')
@@ -244,6 +254,15 @@ export const DocumentEdit = () => {
     return !field.locked
   }
 
+  // ✅ CUSTOM BACK BUTTON HANDLER
+  const handleBack = () => {
+    if (isGroupMode) {
+      navigate(`/groups/${groupId}`)
+    } else {
+      navigate('/documents')
+    }
+  }
+
   if (!documentData || !version) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -268,17 +287,27 @@ export const DocumentEdit = () => {
 
   return (
     <div className="flex h-screen bg-gray-100">
-      {/* Left Sidebar - Field Palette or Links Panel */}
+      {/* Left Sidebar - Field Palette */}
+      {/* ✅ Hide Link/Audit tabs in Group Mode */}
       {activeTab === 'fields' && isDraftMode && (
         <FieldPalette onSelectFieldType={handleAddField} />
       )}
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
-        {/* Enhanced Header */}
+        {/* Header */}
         <div className="bg-white border-b-2 border-gray-200 px-6 py-4 shadow-sm">
           <div className="flex justify-between items-start mb-3">
             <div className="flex-1">
+              {/* ✅ GROUP MODE BADGE */}
+              {isGroupMode && (
+                <div className="mb-2">
+                  <span className="bg-purple-100 text-purple-800 text-xs px-2 py-1 rounded-full font-bold flex items-center gap-1 w-fit">
+                    <span>🗂️</span> Part of Group Package
+                  </span>
+                </div>
+              )}
+
               {isEditingTitle ? (
                 <div className="flex items-center gap-2">
                   <input
@@ -345,9 +374,10 @@ export const DocumentEdit = () => {
                   Lock Version
                 </Button>
               )}
-              <Button onClick={() => navigate('/documents')} variant="secondary" size="sm">
+              {/* ✅ SMART BACK BUTTON */}
+              <Button onClick={handleBack} variant="secondary" size="sm">
                 <span>←</span>
-                Back
+                {isGroupMode ? 'Back to Group' : 'Back'}
               </Button>
             </div>
           </div>
@@ -397,42 +427,44 @@ export const DocumentEdit = () => {
             </div>
           )}
 
-          {/* Enhanced Tab Switcher */}
-          <div className="flex gap-2 mt-4">
-            <button
-              onClick={() => setActiveTab('fields')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                activeTab === 'fields' 
-                  ? 'bg-blue-600 text-white shadow-md' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <span className="mr-2">📋</span>
-              Fields ({fields.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('links')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                activeTab === 'links' 
-                  ? 'bg-blue-600 text-white shadow-md' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <span className="mr-2">🔗</span>
-              Links
-            </button>
-            <button
-              onClick={() => setActiveTab('audit')}
-              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
-                activeTab === 'audit' 
-                  ? 'bg-blue-600 text-white shadow-md' 
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <span className="mr-2">🔍</span>
-              Audit ({version?.signatures?.length || 0})
-            </button>
-          </div>
+          {/* ✅ CONDITIONALLY RENDER TABS - Hide Links/Audit in Group Mode */}
+          {!isGroupMode && (
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={() => setActiveTab('fields')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                  activeTab === 'fields' 
+                    ? 'bg-blue-600 text-white shadow-md' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span className="mr-2">📋</span>
+                Fields ({fields.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('links')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                  activeTab === 'links' 
+                    ? 'bg-blue-600 text-white shadow-md' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span className="mr-2">🔗</span>
+                Links
+              </button>
+              <button
+                onClick={() => setActiveTab('audit')}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                  activeTab === 'audit' 
+                    ? 'bg-blue-600 text-white shadow-md' 
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <span className="mr-2">🔍</span>
+                Audit ({version?.signatures?.length || 0})
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 flex overflow-hidden">

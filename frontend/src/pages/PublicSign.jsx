@@ -1,6 +1,9 @@
+// frontend/src/pages/PublicSign.jsx
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { DocumentViewer } from '../components/pdf/DocumentViewer'
+import { PageLayer } from '../components/pdf/PageLayer' // Ensure you import PageLayer
+import { FieldOverlay } from '../components/fields/FieldOverlay' // Ensure FieldOverlay is imported
 import { Button } from '../components/ui/Button'
 import { Toast } from '../components/ui/Toast'
 import { useApi } from '../hooks/useApi'
@@ -8,9 +11,14 @@ import { publicAPI } from '../services/api'
 import { fieldPctToPx } from '../utils/coords'
 import { getRecipientColor, getRecipientBadgeClasses } from '../utils/recipientColors'
 
-export const PublicSign = () => {
-  const { token } = useParams()
+// ✅ MODIFICATION: Accept props for Group Integration
+export const PublicSign = ({ tokenProp, onComplete }) => {
+  const { token: paramToken } = useParams()
   const navigate = useNavigate()
+  
+  // ✅ LOGIC: Use prop if provided (Group Mode), otherwise use URL param (Single Mode)
+  const token = tokenProp || paramToken
+
   const [pageData, setPageData] = useState(null)
   const [signerName, setSignerName] = useState('')
   const [fieldValues, setFieldValues] = useState({})
@@ -19,6 +27,8 @@ export const PublicSign = () => {
   const [toasts, setToasts] = useState([])
   const [downloadingPdf, setDownloadingPdf] = useState(false)
 
+  // API Hooks
+  // Note: We use the token variable derived above
   const { execute: getSignPage } = useApi(() => publicAPI.getSignPage(token))
   const { execute: submitSignature } = useApi((signData) =>
     publicAPI.submitSignature(token, signData)
@@ -36,7 +46,12 @@ export const PublicSign = () => {
   }
 
   useEffect(() => {
-    loadSignPage()
+    if (token) {
+      // Reset state when token changes (important for Group Flow)
+      setSignerName('')
+      setFieldValues({})
+      loadSignPage()
+    }
   }, [token])
 
   const loadSignPage = async () => {
@@ -54,59 +69,26 @@ export const PublicSign = () => {
       
       if (err.response?.status === 403) {
         if (errorData?.revoked) {
-          setPageData({
-            error: 'This link has been revoked',
-            errorType: 'revoked',
-            token_status: 'invalid',
-            revoked: true
-          })
+          setPageData({ error: 'This link has been revoked', errorType: 'revoked' })
         } else if (errorData?.expired) {
-          setPageData({
-            error: 'This link has expired',
-            errorType: 'expired',
-            token_status: 'invalid',
-            expired: true
-          })
+          setPageData({ error: 'This link has expired', errorType: 'expired' })
         } else if (errorData?.used) {
-          setPageData({
-            error: 'This signing link has already been used',
-            errorType: 'used',
-            token_status: 'invalid',
-            used: true
-          })
+          setPageData({ error: 'This signing link has already been used', errorType: 'used', used: true })
         } else {
-          setPageData({
-            error: errorData?.error || 'Access denied to this document',
-            errorType: 'forbidden',
-            token_status: 'invalid'
-          })
+          setPageData({ error: errorData?.error || 'Access denied', errorType: 'forbidden' })
         }
         return
       }
 
       if (err.response?.status === 404) {
-        setPageData({
-          error: 'Invalid or expired token',
-          errorType: 'notfound',
-          token_status: 'invalid'
-        })
+        setPageData({ error: 'Invalid or expired token', errorType: 'notfound' })
         return
       }
 
-      if (errorData?.token_status === 'invalid') {
-        if (errorData.revoked) {
-          addToast('This link has been revoked', 'error')
-        } else if (errorData.expired) {
-          addToast('This link has expired', 'error')
-        } else if (errorData.used) {
-          addToast('This signing link has already been used', 'error')
-        } else {
-          addToast(errorData.error || 'Invalid or expired token', 'error')
-        }
-      } else {
-        addToast('Invalid or expired token', 'error')
-      }
-      setTimeout(() => navigate('/'), 2000)
+      // Default error toast
+      addToast(errorData?.error || 'Failed to load document', 'error')
+      // Only navigate away if it's a hard error in Single Mode
+      if (!tokenProp) setTimeout(() => navigate('/'), 2000)
     }
   }
 
@@ -145,7 +127,7 @@ export const PublicSign = () => {
         value: value,
       }))
 
-    if (filledFields.length === 0) {
+    if (filledFields.length === 0 && editableFields.length > 0) {
       addToast('Please fill at least one field', 'warning')
       return
     }
@@ -170,13 +152,21 @@ export const PublicSign = () => {
       }
 
       await submitSignature(signData)
-      addToast('Document signed successfully!', 'success')
       
-      setTimeout(async () => {
-        await loadSignPage()
-        setSignerName('')
-        setFieldValues({})
-      }, 500)
+      // ✅ LOGIC SPLIT: Group Mode vs Single Mode
+      if (onComplete) {
+        // Group Mode: Tell parent (PublicGroupSign) to move to next doc
+        onComplete()
+      } else {
+        // Single Mode: Show success and reload to show signed state
+        addToast('Document signed successfully!', 'success')
+        setTimeout(async () => {
+          await loadSignPage()
+          setSignerName('')
+          setFieldValues({})
+        }, 500)
+      }
+
     } catch (err) {
       const errorMsg = err.response?.data?.error || err.message || 'Failed to sign document'
       addToast(errorMsg, 'error')
@@ -328,125 +318,55 @@ export const PublicSign = () => {
             onPageChange={setCurrentPage}
           >
             {(pageNum, scale) => (
-              <div
-                className="absolute inset-0"
-                style={{
-                  width: 612 * scale,
-                  height: 792 * scale,
-                  position: 'relative',
-                }}
+              <PageLayer
+                pageWidth={612}
+                pageHeight={792}
+                fields={pageFields}
+                scale={scale}
               >
-                {/* Locked/signed fields */}
-                {lockedFields.map((field) => {
-                  const pxField = fieldPctToPx(field, 612, 792)
-                  const recipientColor = getRecipientColor(field.recipient, allRecipients)
-                  
-                  return (
-                    <div
-                      key={`locked-${field.id}`}
-                      className="absolute border-2 flex items-center px-2 shadow-md"
-                      style={{
-                        left: pxField.x * scale,
-                        top: pxField.y * scale,
-                        width: pxField.width * scale,
-                        height: pxField.height * scale,
-                        fontSize: `${Math.max(10, pxField.height * scale * 0.5)}px`,
-                        borderColor: recipientColor.color,
-                        backgroundColor: `${recipientColor.color}20`,
-                      }}
-                      title={`${field.recipient} - Signed`}
-                    >
-                      <span className="truncate text-gray-800 font-semibold">
-                        {field.value}
-                      </span>
-                      <span className="ml-auto text-green-600 text-sm font-bold">✓</span>
-                    </div>
-                  )
-                })}
+                {/* 1. Locked/Signed Fields */}
+                {lockedFields.map((field) => (
+                  <FieldOverlay
+                    key={`locked-${field.id}`}
+                    field={field}
+                    pageWidth={612}
+                    pageHeight={792}
+                    isEditing={false}
+                    isSigning={false}
+                    scale={scale}
+                    readOnly={true} // Render as static text
+                  />
+                ))}
 
-                {/* Other recipients' fields */}
-                {otherRecipientFields.map((field) => {
-                  const pxField = fieldPctToPx(field, 612, 792)
-                  const recipientColor = getRecipientColor(field.recipient, allRecipients)
-                  
-                  return (
-                    <div
-                      key={`other-${field.id}`}
-                      className="absolute border-2 border-dashed bg-gray-50"
-                      style={{
-                        left: pxField.x * scale,
-                        top: pxField.y * scale,
-                        width: pxField.width * scale,
-                        height: pxField.height * scale,
-                        borderColor: recipientColor.color,
-                        opacity: 0.6,
-                      }}
-                      title={`${field.recipient} - Pending`}
-                    >
-                      <div className="text-xs text-gray-500 px-1 truncate font-semibold">
-                        {field.label}
-                      </div>
-                    </div>
-                  )
-                })}
+                {/* 2. Other Recipients' Fields (Transparent) */}
+                {otherRecipientFields.map((field) => (
+                  <FieldOverlay
+                    key={`other-${field.id}`}
+                    field={field}
+                    pageWidth={612}
+                    pageHeight={792}
+                    isEditing={false}
+                    isSigning={false}
+                    scale={scale}
+                    readOnly={true}
+                    customStyle={{ opacity: 0.6, borderStyle: 'dashed' }}
+                  />
+                ))}
 
-                {/* Editable fields */}
-                {pageData.is_editable &&
-                  editableFields.map((field) => {
-                    const pxField = fieldPctToPx(field, 612, 792)
-                    const recipientColor = getRecipientColor(field.recipient, allRecipients)
-                    
-                    return (
-                      <div
-                        key={`editable-${field.id}`}
-                        className="absolute"
-                        style={{
-                          left: pxField.x * scale,
-                          top: pxField.y * scale,
-                          width: pxField.width * scale,
-                          height: pxField.height * scale,
-                          zIndex: 10,
-                        }}
-                      >
-                        {field.field_type === 'checkbox' ? (
-                          <input
-                            type="checkbox"
-                            checked={fieldValues[field.id] === 'true' || fieldValues[field.id] === true}
-                            onChange={(e) =>
-                              handleFieldChange(field.id, e.target.checked.toString())
-                            }
-                            className="w-6 h-6 cursor-pointer"
-                            style={{
-                              accentColor: recipientColor.color,
-                            }}
-                            title={field.label}
-                          />
-                        ) : (
-                          <input
-                            type={field.field_type === 'date' ? 'date' : 'text'}
-                            value={fieldValues[field.id] || ''}
-                            onChange={(e) =>
-                              handleFieldChange(field.id, e.target.value)
-                            }
-                            placeholder={field.label}
-                            className="w-full h-full px-2 py-1 border-2 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:z-20 shadow-sm"
-                            style={{
-                              fontSize: `${Math.max(10, pxField.height * scale * 0.5)}px`,
-                              borderColor: recipientColor.color,
-                              backgroundColor: '#ffffff',
-                              boxSizing: 'border-box',
-                              fontFamily: field.field_type === 'signature' ? "'Dancing Script', cursive" : 'inherit',
-                              fontWeight: field.field_type === 'signature' ? '700' : 'normal',
-                              letterSpacing: field.field_type === 'signature' ? '0.5px' : 'normal',
-                            }}
-                            title={field.label}
-                            autoComplete="off"
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-              </div>
+                {/* 3. Editable Fields (Input) */}
+                {pageData.is_editable && editableFields.map((field) => (
+                  <FieldOverlay
+                    key={`editable-${field.id}`}
+                    field={{...field, value: fieldValues[field.id] || ''}}
+                    pageWidth={612}
+                    pageHeight={792}
+                    isEditing={false} // No dragging
+                    isSigning={true}  // Enable inputs
+                    scale={scale}
+                    onUpdate={(updated) => handleFieldChange(updated.id, updated.value)}
+                  />
+                ))}
+              </PageLayer>
             )}
           </DocumentViewer>
         </div>

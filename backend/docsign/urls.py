@@ -10,7 +10,8 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/templates/', include('templates.urls')),
-    path('api/documents/', include('documents.urls')),  # ← Changed from 'api/'
+    path('api/documents/', include('documents.urls')), 
+    path('api/groups/', include('groups.urls')),
 ]
 
 # Serve media files in development

@@ -1,3 +1,4 @@
+// frontend/src/services/api.js
 import axios from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
@@ -123,6 +124,7 @@ export const documentAPI = {
   },
 }
 
+
 // Signing token endpoints
 export const tokenAPI = {
   create: (docId, versionId, tokenData) =>
@@ -132,6 +134,44 @@ export const tokenAPI = {
   
   revoke: (token) =>
     api.post('/documents/links/revoke/', { token }),
+}
+
+// Group endpoints (Additive)
+export const groupAPI = {
+  list: () => api.get('/groups/'),
+  
+  create: (data) => api.post('/groups/', data),
+  
+  get: (id) => api.get(`/groups/${id}/`),
+  
+  // Items management
+  addItem: (groupId, data) => 
+    // data = { document_id: 1 } OR { template_id: 2 }
+    api.post(`/groups/${groupId}/items/`, data),
+    
+  deleteItem: (groupId, itemId) =>
+    api.delete(`/groups/${groupId}/items/${itemId}/`),
+    
+  reorderItems: (groupId, itemIds) =>
+    // itemIds = [3, 1, 2]
+    api.patch(`/groups/${groupId}/reorder/`, { item_ids: itemIds }),
+    
+  lockItem: (groupId, itemId) =>
+    api.post(`/groups/${groupId}/items/${itemId}/lock/`),
+    
+  // Group actions
+  lockGroup: (groupId) =>
+    api.post(`/groups/${groupId}/lock/`),
+    
+  generateLinks: (groupId, recipients) =>
+    // recipients = ["email@example.com", ...]
+    api.post(`/groups/${groupId}/links/`, { recipients }),
+    
+  // Public Signing Flow
+  getNextItem: (groupToken) =>
+    api.get(`/groups/public/sign/${groupToken}/next/`, {
+      headers: { 'Authorization': '' }, // No Auth
+    }),
 }
 
 // Public signing endpoints (no auth)
@@ -152,5 +192,7 @@ export const publicAPI = {
       responseType: 'blob'
     }),
 }
+
+
 
 export default api

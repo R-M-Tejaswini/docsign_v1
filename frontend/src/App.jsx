@@ -1,3 +1,4 @@
+// frontend/src/App.jsx
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
 import { HomePage } from './pages/HomePage'
 import { DocumentsList } from './pages/DocumentsList'
@@ -6,12 +7,15 @@ import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
 import { WebhooksPage } from './pages/WebhooksPage'
+import { GroupList } from './pages/GroupList'
+import { GroupEdit } from './pages/GroupEdit'
+import { PublicGroupSign } from './pages/PublicGroupSign'
 
 function Navigation() {
   const location = useLocation()
   
   // Hide navigation on public sign pages
-  if (location.pathname.includes('/sign/')) {
+if (location.pathname.includes('/sign/') || location.pathname.includes('/group-sign/')) {
     return null
   }
 
@@ -19,6 +23,7 @@ function Navigation() {
     { to: '/templates', label: 'Templates', icon: '📋' },
     { to: '/documents', label: 'Documents', icon: '📄' },
     { to: '/webhooks', label: 'Webhooks', icon: '🪝' },
+    { to: '/groups', label: 'Groups', icon: '👥' },
   ]
 
   const isActive = (path) => location.pathname.startsWith(path)
@@ -77,6 +82,10 @@ function App() {
           <Route path="/templates/:id" element={<TemplateEdit />} />
           <Route path="/sign/:token" element={<PublicSign />} />
           <Route path="/webhooks" element={<WebhooksPage />} />
+          <Route path="/groups" element={<GroupList />} />
+          <Route path="/groups/:id" element={<GroupEdit />} />
+          <Route path="/group-sign/:token" element={<PublicGroupSign />} />
+          
         </Routes>
       </div>
     </Router>
