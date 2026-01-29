@@ -74,7 +74,7 @@ class WebhookService:
         }
         
         # Generate signature
-        signature = webhook.generate_signature(payload)
+        signature = WebhookService.generate_signature(webhook, payload)
         
         headers = {
             'Content-Type': 'application/json',
@@ -110,7 +110,7 @@ class WebhookService:
                 event.delivered_at = timezone.now()
                 event.save()
                 
-                webhook.increment_delivery_attempt(success=True)
+                WebhookService.increment_delivery_attempt(webhook, success=True)
                 logger.info(f"✅ Webhook {webhook.id} delivered successfully (HTTP {response.status_code})")
                 return
             else:
@@ -148,8 +148,53 @@ class WebhookService:
             event.status = 'failed'
             event.save()
             
-            webhook.increment_delivery_attempt(success=False)
+            WebhookService.increment_delivery_attempt(webhook, success=False)
             logger.error(f"❌ Webhook {webhook.id} failed after {WebhookService.MAX_RETRIES} retries")
+    
+    @staticmethod
+    def generate_signature(webhook, payload: dict) -> str:
+        """
+        Generate HMAC-SHA256 signature for webhook payload.
+        
+        Args:
+            webhook: Webhook instance
+            payload: dict, event payload
+            
+        Returns:
+            str: Hexadecimal signature
+        """
+        import hmac
+        import hashlib
+        
+        payload_str = json.dumps(payload, sort_keys=True)
+        signature = hmac.new(
+            webhook.secret.encode(),
+            payload_str.encode(),
+            hashlib.sha256
+        ).hexdigest()
+        return signature
+    
+    @staticmethod
+    def increment_delivery_attempt(webhook, success: bool):
+        """
+        Track delivery statistics.
+        
+        Args:
+            webhook: Webhook instance
+            success: bool, whether delivery was successful
+        """
+        webhook.total_deliveries += 1
+        if success:
+            webhook.successful_deliveries += 1
+        else:
+            webhook.failed_deliveries += 1
+        webhook.last_triggered_at = timezone.now()
+        webhook.save(update_fields=[
+            'total_deliveries',
+            'successful_deliveries',
+            'failed_deliveries',
+            'last_triggered_at'
+        ])
 
 
 # Celery tasks for async webhook delivery

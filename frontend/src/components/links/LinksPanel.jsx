@@ -1,3 +1,8 @@
+/**
+ * ✅ CONSOLIDATED: Removed version concept
+ * Now displays links directly for documents (no version_id)
+ */
+
 import { useState, useEffect } from 'react'
 import { Button } from '../ui/Button'
 import { useApi } from '../../hooks/useApi'
@@ -6,12 +11,14 @@ import { tokenAPI } from '../../services/api'
 import { GenerateLinkModal } from './GenerateLinkModal'
 import { getRecipientBadgeClasses } from '../../utils/recipientColors'
 
-export const LinksPanel = ({ document, version }) => {
+// ✅ UPDATED: Removed version prop
+export const LinksPanel = ({ document }) => {
   const [tokens, setTokens] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [expandedTokenId, setExpandedTokenId] = useState(null)
   const { copy, copied } = useClipboard()
 
+  // ✅ UPDATED: Only document.id (no version.id)
   const { execute: listTokens, loading } = useApi(() =>
     tokenAPI.listForDocument(document.id)
   )
@@ -25,8 +32,8 @@ export const LinksPanel = ({ document, version }) => {
   const loadTokens = async () => {
     try {
       const data = await listTokens()
-      const versionTokens = data.filter(t => t.version_id === version.id)
-      setTokens(versionTokens)
+      // ✅ UPDATED: Removed version_id filter (all tokens belong to document directly now)
+      setTokens(Array.isArray(data) ? data : data.results || [])
     } catch (err) {
       console.error('Failed to load tokens:', err)
     }
@@ -49,7 +56,8 @@ export const LinksPanel = ({ document, version }) => {
     loadTokens()
   }
 
-  const canGenerateLink = version.status !== 'draft'
+  // ✅ UPDATED: document.status (no version.status)
+  const canGenerateLink = document.status !== 'draft'
 
   const getTokenStatusBadge = (token) => {
     if (token.revoked) {
@@ -83,7 +91,8 @@ export const LinksPanel = ({ document, version }) => {
     }
   }
 
-  const allRecipients = version.recipients || []
+  // ✅ UPDATED: document.recipients (no version.recipients)
+  const allRecipients = document.recipients || []
 
   const formatExpiryDate = (expiresAt) => {
     if (!expiresAt) return 'Never'
@@ -95,7 +104,6 @@ export const LinksPanel = ({ document, version }) => {
   }
 
   return (
-    // CRITICAL FIX: Added flex flex-col and overflow-hidden to enable scrolling
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header - Fixed at top */}
       <div className="flex-shrink-0 p-6 border-b border-gray-200 bg-white">
@@ -117,7 +125,7 @@ export const LinksPanel = ({ document, version }) => {
         </div>
       </div>
 
-      {/* Scrollable Content Area - CRITICAL FIX */}
+      {/* Scrollable Content Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {!canGenerateLink && (
           <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
@@ -237,13 +245,13 @@ export const LinksPanel = ({ document, version }) => {
                   </div>
 
                   {/* Signature Events */}
-                  {token.signatures && token.signatures.length > 0 && (
+                  {token.signature_events && token.signature_events.length > 0 && (
                     <div className="border-t-2 border-gray-200 pt-4">
                       <label className="text-xs font-bold text-gray-600 uppercase mb-3 block tracking-wide">
-                        Signature Events ({token.signatures.length})
+                        Signature Events ({token.signature_events.length})
                       </label>
                       <div className="space-y-2 max-h-60 overflow-y-auto">
-                        {token.signatures.map((sig, idx) => (
+                        {token.signature_events.map((sig, idx) => (
                           <div key={idx} className="text-xs p-3 bg-green-50 rounded-lg border-2 border-green-200">
                             <div className="flex items-center justify-between mb-2">
                               {sig.recipient && (
@@ -254,7 +262,7 @@ export const LinksPanel = ({ document, version }) => {
                               <span className="text-green-600 font-bold">✓ Signed</span>
                             </div>
                             <div className="font-bold text-gray-900 mt-1">
-                              {sig.signer_name_display}
+                              {sig.signer_name}
                             </div>
                             <div className="text-gray-600 mt-1">
                               {new Date(sig.signed_at).toLocaleString()}
@@ -296,11 +304,11 @@ export const LinksPanel = ({ document, version }) => {
       </div>
 
       {/* Generate Link Modal */}
+      {/* ✅ UPDATED: Removed version prop */}
       <GenerateLinkModal
         isOpen={showModal}
         onClose={() => setShowModal(false)}
         document={document}
-        version={version}
         onSuccess={handleGenerateSuccess}
       />
     </div>

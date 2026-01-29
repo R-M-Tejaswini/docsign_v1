@@ -1,3 +1,10 @@
+/**
+ * ✅ CONSOLIDATED: Removed version concept
+ * - No version state or nested data
+ * - Direct document manipulation
+ * - Simplified lock/unlock flow
+ */
+
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { DocumentViewer } from '../components/pdf/DocumentViewer'
@@ -18,7 +25,6 @@ export const DocumentEdit = () => {
   const [documentData, setDocumentData] = useState(null)
   const [documentTitle, setDocumentTitle] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
-  const [version, setVersion] = useState(null)
   const [fields, setFields] = useState([])
   const [selectedFieldId, setSelectedFieldId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -26,24 +32,25 @@ export const DocumentEdit = () => {
   const [toasts, setToasts] = useState([])
   const [activeTab, setActiveTab] = useState('fields')
   const [allRecipients, setAllRecipients] = useState(['Recipient 1'])
-  const [downloadingVersion, setDownloadingVersion] = useState(false)
+  const [downloadingDocument, setDownloadingDocument] = useState(false)
 
+  // ✅ CONSOLIDATED: Direct document API calls (no version_id)
   const { execute: getDocument } = useApi(() => documentAPI.get(id))
   const { execute: updateDocument } = useApi((data) => documentAPI.update(id, data))
-  const { execute: lockVersion } = useApi(() => 
-    documentAPI.lockVersion(id, version?.id)
+  const { execute: lockDocument } = useApi(() => 
+    documentAPI.lock(id)
   )
   const { execute: createField } = useApi((data) =>
-    documentAPI.createField(id, version?.id, data)
+    documentAPI.createField(id, data)
   )
   const { execute: updateField } = useApi((fieldId, data) =>
-    documentAPI.updateField(id, version?.id, fieldId, data)
+    documentAPI.updateField(id, fieldId, data)
   )
   const { execute: deleteField } = useApi((fieldId) =>
-    documentAPI.deleteField(id, version?.id, fieldId)
+    documentAPI.deleteField(id, fieldId)
   )
-  const { execute: downloadVersion } = useApi(() =>
-    documentAPI.downloadVersion(id, version?.id)
+  const { execute: downloadDoc } = useApi(() =>
+    documentAPI.download(id)
   )
 
   const addToast = (message, type = 'info') => {
@@ -63,11 +70,9 @@ export const DocumentEdit = () => {
       const data = await getDocument()
       setDocumentData(data)
       setDocumentTitle(data.title)
-      const latestVersion = data.latest_version
-      setVersion(latestVersion)
-      setFields(latestVersion?.fields || [])
+      setFields(data.fields || [])
       
-      const recipients = [...new Set(latestVersion?.fields?.map(f => f.recipient).filter(Boolean))]
+      const recipients = [...new Set(data.fields?.map(f => f.recipient).filter(Boolean))]
       if (recipients.length > 0) {
         setAllRecipients(recipients.sort())
       }
@@ -93,8 +98,8 @@ export const DocumentEdit = () => {
     }
   }
 
-  const handleLockVersion = async () => {
-    if (!window.confirm('Lock this version? You won\'t be able to edit fields after locking.')) {
+  const handleLockDocument = async () => {
+    if (!window.confirm('Lock this document? You won\'t be able to edit fields after locking.')) {
       return
     }
 
@@ -108,12 +113,12 @@ export const DocumentEdit = () => {
     }
 
     try {
-      const updatedVersion = await lockVersion()
-      setVersion(updatedVersion)
-      addToast('Version locked successfully', 'success')
+      const updatedDoc = await lockDocument()
+      setDocumentData(updatedDoc)
+      addToast('Document locked successfully', 'success')
       setActiveTab('links')
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Failed to lock version'
+      const errorMsg = err.response?.data?.error || 'Failed to lock document'
       addToast(errorMsg, 'error')
     }
   }
@@ -128,7 +133,7 @@ export const DocumentEdit = () => {
   }
 
   const handlePdfClick = async (e) => {
-    if (!addingFieldType || !version || !isDraftMode) return
+    if (!addingFieldType || !documentData || !isDraftMode) return
 
     e.stopPropagation()
     
@@ -218,15 +223,15 @@ export const DocumentEdit = () => {
     }
   }
 
-  const handleDownloadVersion = async () => {
+  const handleDownloadDocument = async () => {
     try {
-      setDownloadingVersion(true)
-      const blob = await downloadVersion()
+      setDownloadingDocument(true)
+      const blob = await downloadDoc()
       
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${documentData.title}_v${version.version_number}_signed.pdf`
+      link.download = `${documentData.title}_signed.pdf`
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -236,7 +241,7 @@ export const DocumentEdit = () => {
     } catch (err) {
       addToast('Failed to download PDF: ' + (err.response?.data?.error || err.message), 'error')
     } finally {
-      setDownloadingVersion(false)
+      setDownloadingDocument(false)
     }
   }
 
@@ -244,7 +249,7 @@ export const DocumentEdit = () => {
     return !field.locked
   }
 
-  if (!documentData || !version) {
+  if (!documentData) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
@@ -255,20 +260,20 @@ export const DocumentEdit = () => {
     )
   }
 
-  const fileUrl = version?.file_url || version?.file
+  const fileUrl = documentData?.file_url || documentData?.file
   let absoluteFileUrl = fileUrl
   if (fileUrl && !fileUrl.startsWith('http')) {
     absoluteFileUrl = `http://localhost:8000${fileUrl}`
   }
 
   const pageFields = fields.filter((f) => f.page_number === currentPage)
-  const isDraftMode = version.status === 'draft'
+  const isDraftMode = documentData.status === 'draft'
   const selectedField = fields.find(f => f.id === selectedFieldId)
-  const recipientStats = version.recipient_status || {}
+  const recipientStats = documentData.recipient_status || {}
 
   return (
     <div className="flex h-screen bg-gray-100">
-      {/* Left Sidebar - Field Palette or Links Panel */}
+      {/* Left Sidebar - Field Palette */}
       {activeTab === 'fields' && isDraftMode && (
         <FieldPalette onSelectFieldType={handleAddField} />
       )}
@@ -318,14 +323,14 @@ export const DocumentEdit = () => {
 
             {/* Action Buttons */}
             <div className="flex gap-2">
-              {version?.status === 'completed' && (
+              {documentData?.status === 'completed' && (
                 <Button 
-                  onClick={handleDownloadVersion} 
+                  onClick={handleDownloadDocument} 
                   variant="success" 
                   size="sm"
-                  disabled={downloadingVersion}
+                  disabled={downloadingDocument}
                 >
-                  {downloadingVersion ? (
+                  {downloadingDocument ? (
                     <>
                       <span className="animate-spin">⟳</span>
                       Downloading...
@@ -340,9 +345,9 @@ export const DocumentEdit = () => {
               )}
 
               {isDraftMode && (
-                <Button onClick={handleLockVersion} variant="warning" size="sm">
+                <Button onClick={handleLockDocument} variant="warning" size="sm">
                   <span>🔒</span>
-                  Lock Version
+                  Lock Document
                 </Button>
               )}
               <Button onClick={() => navigate('/documents')} variant="secondary" size="sm">
@@ -357,11 +362,11 @@ export const DocumentEdit = () => {
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600 font-semibold">Status:</span>
               <span className={`font-bold capitalize px-3 py-1 rounded-full text-sm ${
-                version?.status === 'draft' ? 'bg-blue-100 text-blue-800' :
-                version?.status === 'completed' ? 'bg-green-100 text-green-800' :
+                documentData?.status === 'draft' ? 'bg-blue-100 text-blue-800' :
+                documentData?.status === 'completed' ? 'bg-green-100 text-green-800' :
                 'bg-yellow-100 text-yellow-800'
               }`}>
-                {version?.status}
+                {documentData?.status}
               </span>
               {isDraftMode && <span className="text-blue-600 text-sm font-semibold">(Editable)</span>}
             </div>
@@ -430,7 +435,7 @@ export const DocumentEdit = () => {
               }`}
             >
               <span className="mr-2">🔍</span>
-              Audit ({version?.signatures?.length || 0})
+              Audit ({documentData?.signatures?.length || 0})
             </button>
           </div>
         </div>
@@ -474,7 +479,7 @@ export const DocumentEdit = () => {
             </DocumentViewer>
           </div>
 
-          {/* Right Sidebar - FIXED: Added proper height management */}
+          {/* Right Sidebar */}
           <div className="w-96 bg-white border-l-2 border-gray-200 flex flex-col overflow-hidden shadow-lg">
             {activeTab === 'fields' ? (
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -520,10 +525,10 @@ export const DocumentEdit = () => {
                 )}
               </div>
             ) : activeTab === 'links' ? (
-              <LinksPanel document={documentData} version={version} />
+              <LinksPanel document={documentData} />
             ) : (
               <div className="flex-1 overflow-y-auto p-4">
-                <AuditTrailPanel document={documentData} version={version} />
+                <AuditTrailPanel document={documentData} />
               </div>
             )}
           </div>

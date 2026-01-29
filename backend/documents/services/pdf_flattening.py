@@ -257,12 +257,16 @@ class PDFFlatteningService:
     def __init__(self):
         self.renderer = PDFOverlayRenderer()
     
-    def flatten_version(self, document_version) -> bytes:
-        """Generate flattened PDF with all field overlays merged."""
-        if not document_version.file:
-            raise FileNotFoundError("Document version has no file")
+    def flatten_document(self, document) -> bytes:
+        """
+        Generate flattened PDF with all field overlays merged.
         
-        pdf_path = document_version.file.path
+        ✅ CONSOLIDATED: Now works with Document directly
+        """
+        if not document.file:
+            raise FileNotFoundError("Document has no file")
+        
+        pdf_path = document.file.path
         
         if not os.path.exists(pdf_path):
             raise FileNotFoundError(f"PDF file not found at {pdf_path}")
@@ -273,7 +277,7 @@ class PDFFlatteningService:
         for page_num in range(len(reader.pages)):
             original_page = reader.pages[page_num]
             
-            page_fields = document_version.fields.filter(
+            page_fields = document.fields.filter(
                 page_number=page_num + 1,
                 locked=True  # Only render locked (signed) fields
             ).select_for_update(skip_locked=True)
@@ -313,22 +317,28 @@ class PDFFlatteningService:
         
         return overlay_buffer
     
-    def flatten_and_save(self, version):
-        """Flatten signatures onto PDF and save, then compute hash."""
-        # ...existing flattening code...
+    def flatten_and_save(self, document):
+        """
+        Flatten signatures onto PDF and save, then compute hash.
+        
+        ✅ CONSOLIDATED: Now works with Document directly
+        """
+        from django.core.files.base import ContentFile
         
         try:
             # Perform flattening
-            flattened_pdf = self.flatten_version(version)
+            flattened_pdf = self.flatten_document(document)
             
             # Save the flattened PDF
-            filename = f'v{version.version_number}_signed_{datetime.now().timestamp()}.pdf'
-            version.signed_file.save(filename, ContentFile(flattened_pdf))
+            filename = f'signed_{datetime.now().timestamp()}.pdf'
+            document.signed_file.save(filename, ContentFile(flattened_pdf))
             
             # Compute and store SHA256 of signed PDF
-            version.update_signed_pdf_hash()
+            from .document_service import DocumentService
+            service = DocumentService()
+            service.update_signed_pdf_hash(document)
             
-            return version
+            return document
         except Exception as e:
             print(f"❌ Error flattening PDF: {e}")
             raise

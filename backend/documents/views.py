@@ -27,6 +27,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.exceptions import ValidationError  # ✅ NEW: Import ValidationError
 
 # ----------------------------
 # Django imports
@@ -41,20 +42,27 @@ from django.utils import timezone
 # ----------------------------
 # Local app imports
 # ----------------------------
+from templates.models import Template
 from .models import (
-    Document, DocumentVersion, DocumentField,
+    Document, DocumentField,
     SigningToken, SignatureEvent, Webhook, WebhookEvent
 )
 from .serializers import (
     DocumentListSerializer, DocumentDetailSerializer,
-    DocumentCreateSerializer, DocumentVersionSerializer,
+    DocumentCreateSerializer,
     DocumentFieldSerializer, DocumentFieldUpdateSerializer,
-    SigningTokenSerializer, SigningTokenCreateSerializer,
+    SigningTokenSerializer, DocumentSerializer,
     SignatureEventSerializer, PublicSignPayloadSerializer,
     PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
-from templates.models import Template
-from .services import get_pdf_flattening_service
+
+from .services import (
+    get_document_service, 
+    get_signature_service,
+    get_token_service,
+    get_signing_process_service,  # ✅ NEW: Add this import
+    get_pdf_flattening_service
+)
 from .services.webhook_service import WebhookService
 
 # ----------------------------
@@ -79,38 +87,14 @@ class StandardResultsSetPagination(PageNumberPagination):
 # ----------------------------
 class DocumentViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for Document CRUD operations.
-
-    Responsibilities:
-    - Provide list/retrieve/create/update/delete for Document model.
-    - Offer document-version management endpoints (list versions, lock, copy, download).
-    - Provide endpoints to manage fields within versions (create/update/delete).
-    - Ensure correct parser selection for multipart vs JSON requests.
-    - Ensure only allowed operations are performed depending on version status
-      (draft vs locked vs completed).
-
-    Important constraints (kept as-is):
-    - Serializer create() is expected to create the initial DocumentVersion.
-      create() method does not create a second version; comment in code preserves that behavior.
+    ✅ CONSOLIDATED: Simplified to work with Document directly (no versions)
     """
     queryset = Document.objects.all()
     pagination_class = StandardResultsSetPagination
     
     def get_parsers(self):
-        """
-        Return parser classes depending on the HTTP method and URL.
-
-        What:
-        - For POST document creation (multipart file upload) we use MultiPartParser/FormParser.
-        - For field creation endpoint we keep JSONParser (fields endpoints expect JSON).
-        - For all other methods we use JSONParser.
-
-        Why:
-        - Different endpoints accept different content types; selecting parsers
-          early ensures DRF will properly parse request.data and file uploads.
-        """
+        """Parser selection based on HTTP method."""
         if self.request.method == 'POST':
-            # Check if this is document creation (no nested path) vs field creation
             if not self.request.path.endswith('/fields/'):
                 self.parser_classes = (MultiPartParser, FormParser)
             else:
@@ -120,14 +104,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return super().get_parsers()
     
     def get_serializer_class(self):
-        """
-        Choose serializer based on current action.
-
-        What:
-        - create -> DocumentCreateSerializer (handles document + initial version creation)
-        - retrieve -> DocumentDetailSerializer (detailed view)
-        - otherwise -> DocumentListSerializer (compact list)
-        """
+        """Choose serializer based on action."""
         if self.action == 'create':
             return DocumentCreateSerializer
         elif self.action == 'retrieve':
@@ -136,118 +113,51 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return DocumentListSerializer
     
     def create(self, request, *args, **kwargs):
-        """
-        Create a new Document (and its initial version via serializer).
-
-        What:
-        - Validate incoming data using the DocumentCreateSerializer.
-        - Use a transaction to ensure a consistent create operation.
-        - Return the detailed representation after creation.
-
-        Why:
-        - The serializer's create() is expected to fully handle creating the
-          related initial DocumentVersion. The view should not duplicate that logic.
-        """
+        """Create a new Document (no more versions)."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         with transaction.atomic():
-            document = serializer.save()  # ← This should create ONE version via the serializer
-            
-            # Don't create another version here!
-            # The serializer's create() method handles it
-    
+            document = serializer.save()
+        
         output_serializer = DocumentDetailSerializer(document, context={'request': request})
         return Response(output_serializer.data, status=status.HTTP_201_CREATED)
     
-    @action(detail=True, methods=['get'])
-    def versions(self, request, pk=None):
+    # ✅ NEW: Duplicate endpoint (replaces copy_version)
+    @action(detail=True, methods=['post'])
+    def duplicate(self, request, pk=None):
         """
-        List versions for a specific document.
-
-        What:
-        - Retrieves all versions belonging to the document instance.
-        - Serializes them with DocumentVersionSerializer.
-
-        Why:
-        - Consumers need an endpoint to enumerate past versions for audit, downloads,
-          or to choose a version to copy/lock/download.
-        """
-        document = self.get_object()
-        versions = document.versions.all()
-        serializer = DocumentVersionSerializer(
-            versions, many=True, context={'request': request}
-        )
-        return Response(serializer.data)
-    
-    @action(detail=False, methods=['get'])
-    def all_versions(self, request):
-        """
-        Endpoint to list all document versions across all documents (global view).
-
-        What:
-        - Uses select_related for efficiency and orders by created_at desc.
-        - Supports pagination via pagination_class.
-
-        Why:
-        - Useful for administrative views or audit endpoints that need a global stream
-          of versions rather than versions scoped to a single document.
-        """
-        versions = DocumentVersion.objects.select_related('document').order_by('-created_at')
-        page = self.paginate_queryset(versions)
-        if page is not None:
-            serializer = DocumentVersionSerializer(
-                page, many=True, context={'request': request}
-            )
-            return self.get_paginated_response(serializer.data)
+        Create a new independent Document by duplicating this one.
         
-        serializer = DocumentVersionSerializer(
-            versions, many=True, context={'request': request}
-        )
-        return Response(serializer.data)
-    
-    @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)')
-    def version_detail(self, request, pk=None, version_id=None):
-        """
-        Retrieve a single version by ID for a document.
-
-        What:
-        - Fetches the version from document.versions and returns its serialized data.
-
-        Why:
-        - Clients often need to inspect a specific version's metadata and fields.
+        ✅ CONSOLIDATED: Replaces copy_version concept
         """
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        serializer = DocumentVersionSerializer(version, context={'request': request})
-        return Response(serializer.data)
-    
-    @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/lock')
-    def lock_version(self, request, pk=None, version_id=None):
-        """
-        Lock a draft version to prevent further edits.
-
-        What:
-        - Ensures only draft versions can be locked.
-        - Validates every field has an assigned recipient before locking.
-        - Changes status to 'locked' and saves.
-
-        Why:
-        - Locking prevents accidental changes and is a precondition for generating
-          sign links and starting the signing process.
-        """
-        document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
         
-        if version.status != 'draft':
+        try:
+            new_document = document.duplicate()
+            serializer = DocumentDetailSerializer(new_document, context={'request': request})
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
             return Response(
-                {'error': 'Only draft versions can be locked'},
+                {'error': f'Failed to duplicate document: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    # ✅ SIMPLIFIED: Lock (no version_id)
+    @action(detail=True, methods=['post'])
+    def lock(self, request, pk=None):
+        """Lock a draft document to prevent further edits."""
+        document = self.get_object()
+        
+        if document.status != 'draft':
+            return Response(
+                {'error': 'Only draft documents can be locked'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Validate that all fields have recipients assigned
-        fields_without_recipient = version.fields.filter(recipient__isnull=True) | \
-                                   version.fields.filter(recipient='')
+        # Validate all fields have recipients
+        fields_without_recipient = document.fields.filter(recipient__isnull=True) | \
+                                   document.fields.filter(recipient='')
         
         if fields_without_recipient.exists():
             return Response(
@@ -260,39 +170,31 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        version.status = 'locked'
-        version.save(update_fields=['status'])
+        document.status = 'locked'
+        document.save(update_fields=['status'])
         
-        serializer = DocumentVersionSerializer(version, context={'request': request})
+        serializer = DocumentDetailSerializer(document, context={'request': request})
         return Response(serializer.data)
     
-    @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/recipients')
-    def available_recipients(self, request, pk=None, version_id=None):
-        """
-        Return recipient availability and per-recipient status.
-
-        What:
-        - Only allowed for locked versions (drafts are not ready).
-        - Builds a deduplicated list of recipients and reports if they can get sign links,
-          how many fields they have, how many they've signed, and completion status.
-
-        Why:
-        - UI components and automation need to show which recipients still need to sign,
-          whether links can be generated, and reasons for failure when applicable.
-        """
-        document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
+    # ✅ SIMPLIFIED: Available recipients (no version_id)
+    @action(detail=True, methods=['get'])
+    def available_recipients(self, request, pk=None):
+        """Return recipient availability and per-recipient status."""
+        # ✅ FIXED: Prefetch on queryset BEFORE calling get_object()
+        document = self.get_queryset().prefetch_related(
+            'fields', 'tokens'
+        ).get(pk=pk)
         
-        if version.status == 'draft':
+        if document.status == 'draft':
             return Response(
                 {'error': 'Document must be locked before generating links'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        recipient_status = version.get_recipient_status()
-        recipients = version.get_recipients()
+        doc_service = get_document_service()
+        recipient_status = doc_service.get_recipient_status(document)
+        recipients = doc_service.get_recipients(document)
         
-        # Build response with recipient availability - DEDUPLICATED
         available = []
         seen_recipients = set()
         
@@ -303,8 +205,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
             seen_recipients.add(recipient)
             status_info = recipient_status.get(recipient, {})
             
-            # Check if recipient can receive a sign link
-            can_generate, error = version.can_generate_sign_link(recipient)
+            can_generate, error = doc_service.can_generate_sign_link(document, recipient)
             
             available.append({
                 'recipient': recipient,
@@ -317,51 +218,16 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         return Response({
             'recipients': available,
-            'document_status': version.status
+            'document_status': document.status
         })
     
-    @action(detail=True, methods=['patch'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
-    def update_field(self, request, pk=None, version_id=None, field_id=None):
-        """
-        Update a single field on a version.
-
-        What:
-        - Accepts partial updates via DocumentFieldUpdateSerializer (partial=True).
-        - Saves changes and returns the updated field representation.
-
-        Why:
-        - During drafting, fields may need label/position/recipient edits.
-        - In locked mode only some properties may be updatable (handled by serializer/field permissions).
-        """
+    # ✅ SIMPLIFIED: Create field (no version_id)
+    @action(detail=True, methods=['post'])
+    def create_field(self, request, pk=None):
+        """Create a new field on a draft document."""
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        field = get_object_or_404(version.fields, id=field_id)
         
-        serializer = DocumentFieldUpdateSerializer(
-            field, data=request.data, partial=True
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        return Response(DocumentFieldSerializer(field).data)
-    
-    @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/fields')
-    def create_field(self, request, pk=None, version_id=None):
-        """
-        Create a new field on a draft version.
-
-        What:
-        - Only allowed when version.status == 'draft'.
-        - Uses DocumentFieldSerializer to validate and then saves with version relationship.
-
-        Why:
-        - Field creation is part of authoring the signature locations and metadata
-          before locking and sending sign links.
-        """
-        document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        
-        if version.status != 'draft':
+        if document.status != 'draft':
             return Response(
                 {'error': 'Cannot add fields to locked documents'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -369,31 +235,54 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         serializer = DocumentFieldSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        field = serializer.save(version=version)
+        field = serializer.save(document=document)  # ✅ CONSOLIDATED
         
         return Response(
             DocumentFieldSerializer(field).data,
             status=status.HTTP_201_CREATED
         )
     
-    @action(detail=True, methods=['delete'], url_path='versions/(?P<version_id>[0-9]+)/fields/(?P<field_id>[0-9]+)')
-    def delete_field(self, request, pk=None, version_id=None, field_id=None):
-        """
-        Delete a field from a draft version.
-
-        What:
-        - Only allowed for draft versions and for fields that are not locked (not signed).
-        - Returns HTTP 204 on success.
-
-        Why:
-        - During drafting, authors should be able to remove fields; once signed (locked)
-          they must be preserved for auditability.
-        """
+    # ✅ SIMPLIFIED: Update field (no version_id)
+    @action(detail=True, methods=['patch'])
+    def update_field(self, request, pk=None, field_id=None):
+        """Update a field on a draft document."""
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        field = get_object_or_404(version.fields, id=field_id)
+        field_id = request.parser_context['kwargs'].get('field_id') or request.data.get('field_id')
         
-        if version.status != 'draft':
+        if not field_id:
+            return Response(
+                {'error': 'field_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        field = get_object_or_404(document.fields, id=field_id)
+        
+        if document.status == 'draft':
+            serializer = DocumentFieldSerializer(field, data=request.data, partial=True)
+        else:
+            serializer = DocumentFieldUpdateSerializer(field, data=request.data, partial=True)
+        
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        
+        return Response(DocumentFieldSerializer(field).data, status=status.HTTP_200_OK)
+    
+    # ✅ SIMPLIFIED: Delete field (no version_id)
+    @action(detail=True, methods=['delete'])
+    def delete_field(self, request, pk=None, field_id=None):
+        """Delete a field from a draft document."""
+        document = self.get_object()
+        field_id = request.parser_context['kwargs'].get('field_id') or request.data.get('field_id')
+        
+        if not field_id:
+            return Response(
+                {'error': 'field_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        field = get_object_or_404(document.fields, id=field_id)
+        
+        if document.status != 'draft':
             return Response(
                 {'error': 'Cannot delete fields from locked documents'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -408,189 +297,73 @@ class DocumentViewSet(viewsets.ModelViewSet):
         field.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     
-    @action(detail=True, methods=['post'], url_path='versions/(?P<version_id>[0-9]+)/copy')
-    def copy_version(self, request, pk=None, version_id=None):
-        """
-        Create a new draft version by copying an existing version.
-
-        What:
-        - Copies the file reference and metadata, creates fields duplicated for the new draft.
-        - Leaves the original version unchanged.
-
-        Why:
-        - Provides a quick way to branch a version for edits without mutating historical versions.
-        - Useful for preparing a new signing cycle while keeping the signed copy intact.
-        - Optimized with bulk_create to avoid N+1 queries.
-        """
+    # ✅ SIMPLIFIED: Download (no version_id)
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        """Download completed document PDF with flattened signatures."""
         document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
         
-        # Create new version (version_number will auto-increment via save())
-        new_version = DocumentVersion.objects.create(
-            document=document,
-            file=version.file,
-            status='draft',
-            page_count=version.page_count
-        )
-        
-        # Optimization: Use bulk_create for fields (O(1) query instead of O(N))
-        new_fields = []
-        for field in version.fields.all():
-            new_fields.append(
-                DocumentField(
-                    version=new_version,
-                    field_type=field.field_type,
-                    label=field.label,
-                    recipient=field.recipient,
-                    page_number=field.page_number,
-                    x_pct=field.x_pct,
-                    y_pct=field.y_pct,
-                    width_pct=field.width_pct,
-                    height_pct=field.height_pct,
-                    required=field.required
-                )
-            )
-        
-        if new_fields:
-            DocumentField.objects.bulk_create(new_fields)
-        
-        serializer = DocumentVersionSerializer(new_version, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    
-    @action(detail=True, methods=['get'], url_path='versions/(?P<version_id>[0-9]+)/download')
-    def download_version(self, request, pk=None, version_id=None):
-        """
-        Download completed version PDF with flattened signatures.
-
-        What:
-        - Only allows downloads for versions with status 'completed'.
-        - If a signed_file already exists, streams it directly using FileResponse.
-        - Otherwise invokes the configured PDFFlatteningService to flatten and save a signed PDF,
-          then streams the newly created file.
-
-        Why:
-        - Users must be able to download a tamper-evident, flattened PDF once the document is completed.
-        - FileResponse is used to stream the file instead of loading it into RAM (preventing memory crashes).
-        """
-        document = self.get_object()
-        version = get_object_or_404(document.versions, id=version_id)
-        
-        # Only allow download if completed
-        if version.status != 'completed':
+        if document.status != 'completed':
             return Response(
                 {'error': 'Document must be completed before downloading'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            # Check if signed_file exists
-            if version.signed_file:
-                file_path = version.signed_file.path
+            if document.signed_file:
+                file_path = document.signed_file.path
                 if os.path.exists(file_path):
-                    # Optimization: Use FileResponse to stream file from disk
                     return FileResponse(
                         open(file_path, 'rb'), 
                         as_attachment=True, 
-                        filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
+                        filename=f"Document_{document.title}_signed.pdf"
                     )
-        
-            # If no signed_file or it doesn't exist, generate it
-            service = get_pdf_flattening_service()
-            service.flatten_and_save(version)
             
-            # Verify the file was created
-            if not version.signed_file or not os.path.exists(version.signed_file.path):
+            service = get_pdf_flattening_service()
+            service.flatten_and_save(document)
+            
+            if not document.signed_file or not os.path.exists(document.signed_file.path):
                 return Response(
                     {'error': 'Failed to generate signed PDF'},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR
                 )
             
-            # Stream the newly created file
             return FileResponse(
-                open(version.signed_file.path, 'rb'), 
+                open(document.signed_file.path, 'rb'), 
                 as_attachment=True, 
-                filename=f"Document_{document.title}_v{version.version_number}_signed.pdf"
+                filename=f"Document_{document.title}_signed.pdf"
             )
-                
+        
         except Exception as e:
-            import traceback
-            traceback.print_exc()
             return Response(
                 {'error': f'Failed to generate PDF: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
-    def flatten_signatures_on_pdf(self, pdf_path, version):
-        """
-        DEPRECATED helper kept for compatibility.
-
-        What:
-        - Delegates to PDFFlatteningService.flatten_version, returns the result.
-
-        Why:
-        - Historically used to flatten PDFs directly in the view; retained for backward
-          compatibility while encouraging use of the service layer.
-        """
-        service = get_pdf_flattening_service()
-        return service.flatten_version(version)
 
 
-# ----------------------------
-# Signing Token viewset
-# ----------------------------
+# ✅ SIMPLIFIED: SigningTokenViewSet (no version_id)
 class SigningTokenViewSet(viewsets.ViewSet):
-    """
-    ViewSet for managing signing tokens.
-
-    Responsibilities:
-    - List tokens for a document.
-    - Create tokens bound to document versions.
-    - Revoke tokens.
-
-    Why:
-    - Signing tokens are the mechanism to grant a recipient either signing or view-only access
-      to a specific document version without requiring authentication.
-    """
+    """ViewSet for managing signing tokens."""
     
-    def list(self, request, document_id=None):
-        """
-        List all signing tokens for a given document.
-
-        What:
-        - Uses select_related and prefetch_related to efficiently fetch related version and events.
-        - Returns tokens serialized for client consumption.
-
-        Why:
-        - Administrators or audit UIs need a list of tokens to track distribution and revocation.
-        """
-        document = get_object_or_404(Document, id=document_id)
+    def list(self, request, pk=None):
+        """List all signing tokens for a given document."""
+        document = get_object_or_404(Document, id=pk)
         tokens = SigningToken.objects.filter(
-            version__document=document
-        ).select_related('version').prefetch_related('signature_events')
+            document=document
+        ).select_related('document').prefetch_related('signature_events')
         
         serializer = SigningTokenSerializer(
             tokens, many=True, context={'request': request}
         )
         return Response(serializer.data)
     
-    def create(self, request, document_id=None, version_id=None):
-        """
-        Create a new signing token for a specific document version.
-
-        What:
-        - Validates input using SigningTokenCreateSerializer which expects context={'version': version}.
-        - Handles known validation errors and returns clear 400 messages for invalid input.
-
-        Why:
-        - Token creation is the entry point for generating links for recipients; validation ensures
-          tokens are created only for supported recipients/scopes.
-        """
-        document = get_object_or_404(Document, id=document_id)
-        version = get_object_or_404(document.versions, id=version_id)
+    def create(self, request, pk=None):
+        """Create a new signing token for a document."""
+        document = get_object_or_404(Document, id=pk)
         
-        serializer = SigningTokenCreateSerializer(
+        serializer = SigningTokenSerializer(
             data=request.data,
-            context={'version': version}
+            context={'document': document, 'request': request}
         )
         serializer.is_valid(raise_exception=True)
         
@@ -608,15 +381,7 @@ class SigningTokenViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'])
     def revoke(self, request):
-        """
-        Revoke a signing token.
-
-        What:
-        - Accepts token string in request.data['token'] and marks the token as revoked.
-
-        Why:
-        - Revocation invalidates previously issued links so they can no longer be used to sign.
-        """
+        """Revoke a signing token."""
         token_str = request.data.get('token')
         if not token_str:
             return Response(
@@ -640,43 +405,27 @@ class SigningTokenViewSet(viewsets.ViewSet):
             )
 
 
-# ----------------------------
-# Public signing (no auth) viewset
-# ----------------------------
+# ✅ SIMPLIFIED: PublicSignViewSet (updated for Document model)
 class PublicSignViewSet(viewsets.ViewSet):
-    """
-    ViewSet for public signing endpoints.
-
-    Responsibilities:
-    - Provide GET to fetch signing page data for a token (sign or view-only).
-    - Provide POST to submit signatures via a token (only sign scope).
-    - Provide download endpoint for public tokens.
-
-    Why:
-    - Enables external recipients (without an account) to sign documents using a secure token.
-    - This ViewSet is intentionally AllowAny because recipients are unauthenticated users.
-    """
+    """ViewSet for public signing endpoints."""
     permission_classes = [AllowAny]
+    
+    def get_client_ip(self, request):
+        """Extract client IP address from request."""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0].strip()
+            return ip
+        return request.META.get('REMOTE_ADDR')
     
     @action(detail=False, methods=['get'], url_path='sign/(?P<token>[^/.]+)')
     def get_sign_page(self, request, token=None):
-        """
-        Retrieve signing page data for the provided token.
-
-        What:
-        - Validates token existence and validity.
-        - Determines which fields are editable for the token's recipient and returns
-          version/fields/signature state necessary for a signing UI.
-
-        Why:
-        - Signing UI needs to know which fields the current token holder can edit,
-          what the version metadata is, and what signatures already exist.
-        """
+        """Retrieve signing page data for the provided token."""
         try:
             signing_token = SigningToken.objects.select_related(
-                'version__document'
+                'document'
             ).prefetch_related(
-                'version__fields',
+                'document__fields',
                 'signature_events'
             ).get(token=token)
         except SigningToken.DoesNotExist:
@@ -685,8 +434,8 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Check token validity
-        is_valid, error_message = signing_token.is_valid()
+        token_service = get_token_service()
+        is_valid, error_message = token_service.is_token_valid(signing_token)
         if not is_valid:
             return Response(
                 {
@@ -699,30 +448,27 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        version = signing_token.version
+        document = signing_token.document
+        doc_service = get_document_service()
         
         try:
-            # Determine editable fields based on token scope and recipient
             editable_field_ids = []
             is_editable = False
             
             if signing_token.scope == 'sign' and not signing_token.used:
-                # Sign token - only editable fields for this recipient
                 is_editable = True
                 editable_field_ids = list(
-                    version.fields.filter(
+                    document.fields.filter(
                         recipient=signing_token.recipient,
                         locked=False
                     ).values_list('id', flat=True)
                 )
             
-            # Get all fields with their current values
-            fields = version.fields.all()
+            fields = document.fields.all()
             fields_data = DocumentFieldSerializer(fields, many=True).data
             
-            # Get all signature events for this version
             signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
-                        version.signatures.all()
+                        document.signatures.all()
             signatures_data = SignatureEventSerializer(signatures, many=True).data
             
             return Response({
@@ -731,16 +477,13 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'recipient': signing_token.recipient,
                 'is_editable': is_editable,
                 'editable_field_ids': editable_field_ids,
-                'version': DocumentVersionSerializer(version).data,
+                'document': DocumentSerializer(document).data,  # ✅ CONSOLIDATED
                 'fields': fields_data,
                 'signatures': signatures_data,
                 'expires_at': signing_token.expires_at,
-                'recipient_status': version.get_recipient_status() if signing_token.recipient else None
+                'recipient_status': doc_service.get_recipient_status(document) if signing_token.recipient else None
             })
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            print(f"❌ Error in get_sign_page: {e}")
             return Response(
                 {'error': f'Internal server error: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -748,24 +491,10 @@ class PublicSignViewSet(viewsets.ViewSet):
     
     @action(detail=False, methods=['post'], url_path='sign/(?P<token>[^/.]+)')
     def submit_signature(self, request, token=None):
-        """
-        Submit signature data for a recipient using a sign token.
-
-        What:
-        - Validates token and scope (must be sign).
-        - Validates input payload via PublicSignPayloadSerializer.
-        - Ensures fields being signed belong to the recipient and required fields are filled.
-        - Creates SignatureEvent, locks fields (using bulk_update), converts token to view-only,
-          updates version status, and triggers webhooks.
-
-        Why:
-        - Central point ensuring data integrity when anonymous signers submit values.
-        - Transactional: all updates succeed or roll back together.
-        - Optimized to use bulk_update for fields to prevent N+1 database queries.
-        """
+        """Submit signature data for a recipient using a sign token."""
         try:
             signing_token = SigningToken.objects.select_related(
-                'version__document'
+                'document'
             ).get(token=token)
         except SigningToken.DoesNotExist:
             return Response(
@@ -773,399 +502,211 @@ class PublicSignViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        # Validate token
-        is_valid, error_message = signing_token.is_valid()
-        if not is_valid:
-            return Response(
-                {'error': error_message},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Only sign tokens can submit signatures
-        if signing_token.scope != 'sign':
-            return Response(
-                {'error': 'This is a view-only link'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        # Parse and validate payload
         serializer = PublicSignPayloadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         signer_name = serializer.validated_data['signer_name']
         field_values = serializer.validated_data['field_values']
         
-        version = signing_token.version
-        recipient = signing_token.recipient
-        
-        # Validate that all fields being signed belong to this recipient
-        field_ids = [fv['field_id'] for fv in field_values]
-        recipient_fields = version.fields.filter(
-            id__in=field_ids,
-            recipient=recipient,
-            locked=False
-        )
-        
-        if recipient_fields.count() != len(field_ids):
-            return Response(
-                {'error': 'Some fields do not belong to this recipient or are already signed'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Validate required fields for this recipient are filled
-        required_recipient_fields = version.fields.filter(
-            recipient=recipient,
-            required=True,
-            locked=False
-        )
-        filled_field_ids = set(field_ids)
-        missing_required = required_recipient_fields.exclude(id__in=filled_field_ids)
-        
-        if missing_required.exists():
-            return Response(
-                {
-                    'error': 'All required fields must be filled',
-                    'missing_fields': list(missing_required.values('id', 'label'))
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Process signature with transaction
-        with transaction.atomic():
-            # Optimization: Use bulk_update to update fields in one query
-            fields_to_update = []
-            
-            # Create a map for O(1) lookups
-            fields_map = {f.id: f for f in recipient_fields}
-            
-            for fv in field_values:
-                field = fields_map.get(int(fv['field_id']))
-                if field:
-                    field.value = fv['value']
-                    field.locked = True
-                    fields_to_update.append(field)
-            
-            if fields_to_update:
-                DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
-            
-            # Compute document hash
-            document_sha256 = version.compute_sha256()
-            
-            # Create signature event (event_hash computed in save())
-            signature_event = SignatureEvent.objects.create(
-                version=version,
-                token=signing_token,
-                recipient=recipient,
+        try:
+            signing_service = get_signing_process_service()
+            result = signing_service.process_signature_submission(
+                signing_token=signing_token,
                 signer_name=signer_name,
+                field_values=field_values,
                 ip_address=self.get_client_ip(request),
-                user_agent=request.META.get('HTTP_USER_AGENT', ''),
-                document_sha256=document_sha256,
-                field_values=[
-                    {'field_id': fv['field_id'], 'value': fv['value']}
-                    for fv in field_values
-                ],
-                metadata={
-                    'recipient': recipient,
-                    'fields_signed': len(field_values)
-                }
-                # event_hash is computed by signal after save
+                user_agent=request.META.get('HTTP_USER_AGENT', '')
             )
             
-            # Convert sign token to view-only
-            signing_token.convert_to_view_only()
-            
-            # Update version status based on completion
-            version.update_status()
-            
-            # ✅ TRIGGER WEBHOOK: Signature Created
-            WebhookService.trigger_event(
-                event_type='document.signature_created',
-                payload={
-                    'document_id': version.document.id,
-                    'document_title': version.document.title,
-                    'version_id': version.id,
-                    'version_number': version.version_number,
-                    'signature_id': signature_event.id,
-                    'signer_name': signer_name,
-                    'recipient': recipient,
-                    'signed_at': signature_event.signed_at.isoformat(),
-                    'field_values': signature_event.field_values,
-                    'ip_address': signature_event.ip_address,
-                }
-            )
-            
-            # ✅ TRIGGER WEBHOOK: Document Completed (if all signed)
-            if version.status == 'completed':
-                WebhookService.trigger_event(
-                    event_type='document.completed',
-                    payload={
-                        'document_id': version.document.id,
-                        'document_title': version.document.title,
-                        'version_id': version.id,
-                        'version_number': version.version_number,
-                        'status': version.status,
-                        'completed_at': timezone.now().isoformat(),
-                        'signatures_count': version.signatures.count(),
-                        'all_signatures': [
-                            {
-                                'id': sig.id,
-                                'signer_name': sig.signer_name,
-                                'recipient': sig.recipient,
-                                'signed_at': sig.signed_at.isoformat(),
-                            }
-                            for sig in version.signatures.all()
-                        ],
-                        'download_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/download/',
-                        'audit_export_url': f'{settings.BASE_URL}/api/documents/{version.document.id}/versions/{version.id}/audit_export/',
-                    }
+            response_serializer = PublicSignResponseSerializer(result['response_data'])
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+        
+        except ValidationError as e:
+            if isinstance(e.message_dict, dict):
+                return Response(e.message_dict, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response(
+                    {'error': str(e.message)},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
+        except Exception as e:
+            # ✅ IMPROVED: Log full traceback
+            import traceback
+            print("=" * 80)
+            print("ERROR IN SUBMIT_SIGNATURE:")
+            print("=" * 80)
+            traceback.print_exc()
+            print("=" * 80)
+            print(f"Exception type: {type(e).__name__}")
+            print(f"Exception message: {str(e)}")
+            print("=" * 80)
             
-            response_serializer = PublicSignResponseSerializer({
-            'signature_id': signature_event.id,
-            'message': 'Document signed successfully',
-            'version_status': version.status,
-            'recipient': recipient,
-            'link_converted_to_view': True
-        })
-        
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
-    
-    @staticmethod
-    def get_client_ip(request):
-        """
-        Extract client IP from request metadata.
-
-        What:
-        - Checks X-Forwarded-For header first (common when behind proxies/load balancers),
-          falls back to REMOTE_ADDR otherwise.
-
-        Why:
-        - IP is captured for signature events to provide audit trails and tamper detection.
-        """
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
-        return ip
-
-    def get_recipients(self, obj):
-        """
-        Helper to return deduplicated recipients list from model method.
-
-        What:
-        - Delegates to model implementation which should already dedupe recipients.
-
-        Why:
-        - Keeps view responsibilities limited (just returns what model provides).
-        """
-        return obj.get_recipients()  # This should already be deduped in the model
-    
-    def flatten_signatures_on_pdf(self, pdf_path, version):
-        """
-        Deprecated compatibility method delegating to PDFFlatteningService.
-
-        What:
-        - Calls service.flatten_version(version)
-
-        Why:
-        - Kept so older integrations that call this helper still function.
-        """
-        service = get_pdf_flattening_service()
-        return service.flatten_version(version)
-    
-    @action(detail=False, methods=['get'], url_path='download/(?P<token>[^/.]+)')
-    def download_public(self, request, token=None):
-        """
-        Download a completed signed PDF via a public token.
-
-        What:
-        - Validates token → version → ensures completed status → ensures signed_file exists
-          or requests generation via PDFFlatteningService.
-        - Streams signed PDF to the client.
-
-        Why:
-        - Allows external recipients with a token to retrieve the finalized signed PDF.
-        """
-        try:
-            signing_token = SigningToken.objects.select_related('version').get(token=token)
-        except SigningToken.DoesNotExist:
-            return Response({'error': 'Invalid token'}, status=status.HTTP_404_NOT_FOUND)
-        
-        version = signing_token.version
-        
-        # Only allow download if completed
-        if version.status != 'completed':
             return Response(
-                {'error': 'Document is not yet complete'},
+                {'error': f'Failed to process signature: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'], url_path='public/download/(?P<token>[^/.]+)')
+    def download_public(self, request, token=None):
+        """Download PDF for a public token (works for both sign and view scopes)."""
+        print(f"\n{'='*80}")
+        print(f"DOWNLOAD_PUBLIC CALLED WITH TOKEN: {token}")
+        print(f"{'='*80}\n")
+        
+        try:
+            signing_token = SigningToken.objects.select_related(
+                'document'
+            ).get(token=token)
+            print(f"✅ Token found: {signing_token.token}")
+            print(f"✅ Document: {signing_token.document.title}")
+        except SigningToken.DoesNotExist:
+            print(f"❌ Token not found: {token}")
+            return Response(
+                {'error': 'Invalid token'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # ✅ Check if token is revoked (applies to ALL scopes)
+        if signing_token.revoked:
+            print(f"❌ Token revoked")
+            return Response(
+                {'error': 'This link has been revoked'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ Check if token is expired (applies to ALL scopes)
+        if signing_token.expires_at and timezone.now() > signing_token.expires_at:
+            print(f"❌ Token expired: {signing_token.expires_at}")
+            return Response(
+                {'error': 'This link has expired'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # ✅ FIXED: Access document directly
+        document = signing_token.document
+        print(f"✅ Document status: {document.status}")
+        print(f"✅ Document file: {document.file}")
+        
+        # For sign links: can download if completed
+        # For view links: can always download
+        if signing_token.scope == 'sign' and document.status != 'completed':
+            print(f"❌ Sign link but document not completed: {document.status}")
+            return Response(
+                {'error': 'Document must be completed before downloading with sign links'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # Check file exists
+        if not document.file:
+            print(f"❌ No file on document")
+            return Response(
+                {'error': 'Document file not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
         try:
-            # Generate or retrieve signed PDF
-            if not version.signed_file:
-                service = get_pdf_flattening_service()
-                service.flatten_and_save(version)
+            file_path = document.file.path
+            print(f"✅ File path: {file_path}")
+            print(f"✅ File exists: {os.path.exists(file_path)}")
             
-            # Verify file exists
-            if not version.signed_file or not os.path.exists(version.signed_file.path):
+            if not os.path.exists(file_path):
+                print(f"❌ File not found at path: {file_path}")
                 return Response(
-                    {'error': 'PDF file not found'},
+                    {'error': 'File not found on server'},
                     status=status.HTTP_404_NOT_FOUND
                 )
             
-            # Optimization: Stream the file with FileResponse
-            return FileResponse(
-                open(version.signed_file.path, 'rb'), 
-                as_attachment=True, 
-                filename=f"{version.document.title}_signed.pdf"
-            )
+            # ✅ Return the file
+            print(f"✅ Reading file...")
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+                print(f"✅ File size: {len(file_content)} bytes")
                 
+                response = HttpResponse(
+                    file_content,
+                    content_type='application/pdf'
+                )
+                response['Content-Disposition'] = f'attachment; filename="{document.title}.pdf"'
+                print(f"✅ Response created successfully")
+                print(f"{'='*80}\n")
+                return response
+    
         except Exception as e:
+            print(f"❌ Exception: {type(e).__name__}: {str(e)}")
             import traceback
             traceback.print_exc()
+            print(f"{'='*80}\n")
             return Response(
-                {'error': f'Failed to generate PDF: {str(e)}'},
+                {'error': f'Failed to download file: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 
-# ----------------------------
-# Signature verification / audit exports
-# ----------------------------
+# ✅ SIMPLIFIED: SignatureVerificationViewSet (updated for Document model)
 class SignatureVerificationViewSet(viewsets.ViewSet):
-    """
-    ViewSet for signature verification and audit exports.
-
-    Responsibilities:
-    - Provide endpoints to list and verify signature events for a given document version.
-    - Produce a ZIP audit export containing signed PDF, MANIFEST.json, and VERIFICATION_REPORT.json.
-
-    Why:
-    - Supports tamper-evidence verification, forensic inspection, and external audits.
-    """
+    """ViewSet for signature verification and audit exports."""
     
-    @action(detail=False, methods=['get'], 
-            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures')
-    def list_signatures(self, request, doc_id=None, version_id=None):
-        """
-        List all signature events for a version.
-
-        What:
-        - Returns all SignatureEvent objects associated with the version.
-
-        Why:
-        - UIs and audit tools need to enumerate signatures for an event timeline and verification.
-        """
-        version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
-        signatures = version.signatures.all()
+    @action(detail=False, methods=['get'], url_path='documents/(?P<doc_id>[0-9]+)/signatures')
+    def list_signatures(self, request, doc_id=None):
+        """List all signature events for a document."""
+        document = get_object_or_404(Document, id=doc_id)
+        signatures = document.signatures.all()
         serializer = SignatureEventSerializer(signatures, many=True)
         return Response(serializer.data)
     
-    @action(detail=False, methods=['get'], 
-            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/signatures/(?P<sig_id>[0-9]+)/verify')
-    def verify_signature(self, request, doc_id=None, version_id=None, sig_id=None):
-        """
-        Verify integrity of a specific signature event.
-
-        What:
-        - Recomputes event hash and document PDF hashes and compares them with stored values.
-        - Also checks signed PDF hash (if present) for tamper detection.
-
-        Why:
-        - Provides a deterministic verification result useful for audits and detecting tampering.
-        """
-        version = get_object_or_404(DocumentVersion, id=version_id, document_id=doc_id)
-        signature = get_object_or_404(SignatureEvent, id=sig_id, version=version)
+    @action(detail=False, methods=['get'], url_path='documents/(?P<doc_id>[0-9]+)/signatures/(?P<sig_id>[0-9]+)/verify')
+    def verify_signature(self, request, doc_id=None, sig_id=None):
+        """Verify integrity of a specific signature event."""
+        document = get_object_or_404(Document, id=doc_id)
+        signature = get_object_or_404(SignatureEvent, id=sig_id, document=document)
         
-        # Recompute event hash
-        current_event_hash = signature.compute_event_hash()
-        stored_event_hash = signature.event_hash
-        
-        # Check if PDF hash matches
-        current_pdf_hash = version.compute_sha256()
-        stored_pdf_hash = signature.document_sha256
-        
-        # Check if signed PDF hash matches (if available)
-        signed_pdf_valid = True
-        if version.signed_file and version.signed_pdf_sha256:
-            current_signed_pdf_hash = version.compute_signed_pdf_hash()
-            signed_pdf_valid = current_signed_pdf_hash == version.signed_pdf_sha256
-        
-        is_valid = (
-            current_event_hash == stored_event_hash and
-            current_pdf_hash == stored_pdf_hash and
-            signed_pdf_valid
-        )
+        sig_service = get_signature_service()
+        verification_result = sig_service.verify_signature_integrity(signature, document)
         
         return Response({
             'signature_id': signature.id,
-            'valid': is_valid,
-            'verification_details': {
-                'event_hash_match': current_event_hash == stored_event_hash,
-                'stored_event_hash': stored_event_hash,
-                'current_event_hash': current_event_hash,
-                'pdf_hash_match': current_pdf_hash == stored_pdf_hash,
-                'stored_pdf_hash': stored_pdf_hash,
-                'current_pdf_hash': current_pdf_hash,
-                'signed_pdf_hash_match': signed_pdf_valid,
-                'stored_signed_pdf_hash': version.signed_pdf_sha256,
-                'current_signed_pdf_hash': version.compute_signed_pdf_hash() if version.signed_file else None,
-            },
+            'valid': verification_result['valid'],
+            'verification_details': verification_result['details'],
             'signature': SignatureEventSerializer(signature).data
         })
     
-    @action(detail=False, methods=['get'], 
-            url_path='documents/(?P<doc_id>[0-9]+)/versions/(?P<version_id>[0-9]+)/audit_export')
-    def audit_export(self, request, doc_id=None, version_id=None):
-        """
-        Export a complete audit package as a ZIP.
-
-        What:
-        - Assembles signed PDF, MANIFEST.json, and VERIFICATION_REPORT.json into an in-memory ZIP.
-        - Manifest contains metadata and signature entries; verification report contains per-signature validity checks.
-
-        Why:
-        - Provides a portable, self-contained audit artifact that can be shared with external auditors
-          or stored off-system for long-term verification.
-        
-        Note on Scalability:
-        - Currently builds ZIP in memory. For very large files, this should be moved to a background task
-          that generates the file to S3/Disk and emails a download link to prevent memory issues.
-        """
+    @action(detail=False, methods=['get'], url_path='documents/(?P<doc_id>[0-9]+)/audit_export')
+    def audit_export(self, request, doc_id=None):
+        """Export a complete audit package as a ZIP."""
         document = get_object_or_404(Document, id=doc_id)
-        version = get_object_or_404(DocumentVersion, id=version_id, document=document)
         
-        if not version.signed_file:
+        if not document.signed_file:
             return Response(
                 {'error': 'Signed PDF not yet generated'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
-            # Create ZIP in memory
+            doc_service = get_document_service()
+            sig_service = get_signature_service()
+            
             zip_buffer = BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add signed PDF
-                if version.signed_file:
-                    pdf_filename = f"{document.title}_v{version.version_number}_signed.pdf"
-                    with version.signed_file.open('rb') as f:
+                if document.signed_file:
+                    pdf_filename = f"{document.title}_signed.pdf"
+                    with document.signed_file.open('rb') as f:
                         zipf.writestr(pdf_filename, f.read())
                 
-                # Build verification manifest
+                original_file_sha256 = doc_service.compute_sha256(document)
+                
                 manifest = {
                     'document_id': document.id,
                     'document_title': document.title,
-                    'version_number': version.version_number,
-                    'status': version.status,
+                    'status': document.status,
                     'exported_at': datetime.now().isoformat(),
-                    'signed_pdf_sha256': version.signed_pdf_sha256,
-                    'original_file_sha256': version.compute_sha256(),
+                    'signed_pdf_sha256': document.signed_pdf_sha256,
+                    'original_file_sha256': original_file_sha256,
                     'signatures': []
                 }
                 
-                # Add all signature events
-                for sig in version.signatures.all():
+                for sig in document.signatures.all():
+                    is_valid = sig_service.is_signature_valid(sig)
+                    
                     sig_data = {
                         'id': sig.id,
                         'signer_name': sig.signer_name,
@@ -1176,18 +717,15 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                         'event_hash': sig.event_hash,
                         'document_sha256': sig.document_sha256,
                         'field_values': sig.field_values,
-                        'is_valid': sig.compute_event_hash() == sig.event_hash
+                        'is_valid': is_valid
                     }
                     manifest['signatures'].append(sig_data)
                 
-                # Write manifest
                 zipf.writestr('MANIFEST.json', json.dumps(manifest, indent=2))
                 
-                # Add detailed verification report
                 verification_report = {
                     'verification_timestamp': datetime.now().isoformat(),
                     'document_id': document.id,
-                    'version_id': version.id,
                     'overall_status': 'VALID' if all(
                         s['is_valid'] for s in manifest['signatures']
                     ) else 'INVALID',
@@ -1195,8 +733,9 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
                     'audit_details': []
                 }
                 
-                for sig in version.signatures.all():
-                    is_valid = sig.compute_event_hash() == sig.event_hash
+                for sig in document.signatures.all():
+                    is_valid = sig_service.is_signature_valid(sig)
+                    
                     verification_report['audit_details'].append({
                         'signature_id': sig.id,
                         'signer': sig.signer_name,
@@ -1211,7 +750,7 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             
             zip_buffer.seek(0)
             response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
-            response['Content-Disposition'] = f'attachment; filename="audit_export_{document.title}_v{version.version_number}.zip"'
+            response['Content-Disposition'] = f'attachment; filename="audit_export_{document.title}.zip"'
             return response
         
         except Exception as e:
@@ -1377,6 +916,9 @@ class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
         - Critical for troubleshooting delivery issues and debugging external integrations.
         """
         event = self.get_object()
+        logs = event.delivery_logs.all().order_by('-created_at')
+        
+        page = self.paginate_queryset(logs)
         logs = event.delivery_logs.all().order_by('-created_at')
         
         page = self.paginate_queryset(logs)

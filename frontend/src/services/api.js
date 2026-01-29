@@ -1,3 +1,8 @@
+/**
+ * ✅ UPDATED: Removed version_id parameters from all calls
+ * All other functionality remains identical
+ */
+
 import axios from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api'
@@ -9,7 +14,7 @@ const api = axios.create({
   },
 })
 
-// Template endpoints
+// ===== TEMPLATE ENDPOINTS =====
 export const templateAPI = {
   list: () => api.get('/templates/'),
   
@@ -24,7 +29,9 @@ export const templateAPI = {
   
   get: (id) => api.get(`/templates/${id}/`),
   
-  update: (id, data) => api.patch(`/templates/${id}/`, data),  // ← Add this
+  update: (id, data) => api.patch(`/templates/${id}/`, data),
+  
+  delete: (id) => api.delete(`/templates/${id}/`),
   
   getRecipients: (templateId) => api.get(`/templates/${templateId}/recipients/`),
   
@@ -38,7 +45,7 @@ export const templateAPI = {
     api.delete(`/templates/${templateId}/fields/${fieldId}/`),
 }
 
-// Document endpoints
+// ===== DOCUMENT ENDPOINTS (✅ UPDATED: NO version_id) =====
 export const documentAPI = {
   list: () => api.get('/documents/'),
   
@@ -61,72 +68,48 @@ export const documentAPI = {
   
   get: (id) => api.get(`/documents/${id}/`),
   
-  update: (id, data) => api.patch(`/documents/${id}/`, data),  // ← Add this
+  update: (id, data) => api.patch(`/documents/${id}/`, data),
   
-  // Document versions
-  getVersions: (docId) => docId 
-    ? api.get(`/documents/${docId}/versions/`)
-    : api.get(`/documents/versions/`),  // ← This should hit the paginated endpoint
+  delete: (id) => api.delete(`/documents/${id}/`),
   
-  getVersion: (docId, versionId) =>
-    api.get(`/documents/${docId}/versions/${versionId}/`),
+  // ✅ UPDATED: Duplicate document (replaces copyVersion)
+  duplicate: (id) => api.post(`/documents/${id}/duplicate/`),
   
-  copyVersion: (docId, versionId) =>
-    api.post(`/documents/${docId}/versions/${versionId}/copy/`),
+  lock: (id) => api.post(`/documents/${id}/lock/`),
   
-  lockVersion: (docId, versionId) =>
-    api.post(`/documents/${docId}/versions/${versionId}/lock/`),
+  getAvailableRecipients: (id) => api.get(`/documents/${id}/recipients/`),
   
-  getAvailableRecipients: (docId, versionId) =>
-    api.get(`/documents/${docId}/versions/${versionId}/recipients/`),
+  createField: (docId, fieldData) =>
+    api.post(`/documents/${docId}/fields/`, fieldData),
   
-  // Document fields
-  createField: (docId, versionId, fieldData) =>
-    api.post(`/documents/${docId}/versions/${versionId}/fields/`, fieldData),
+  updateField: (docId, fieldId, fieldData) =>
+    api.patch(`/documents/${docId}/fields/${fieldId}/`, fieldData),
   
-  updateField: (docId, versionId, fieldId, fieldData) =>
-    api.patch(
-      `/documents/${docId}/versions/${versionId}/fields/${fieldId}/`,
-      fieldData
-    ),
+  deleteField: (docId, fieldId) =>
+    api.delete(`/documents/${docId}/fields/${fieldId}/`),
   
-  deleteField: (docId, versionId, fieldId) =>
-    api.delete(`/documents/${docId}/versions/${versionId}/fields/${fieldId}/`),
-  
-  downloadVersion: (docId, versionId) =>
-    api.get(`/documents/${docId}/versions/${versionId}/download/`, {
+  download: (id) =>
+    api.get(`/documents/${id}/download/`, {
       responseType: 'blob'
     }),
   
-  verifySignature: (docId, versionId, sigId) =>
-    api.get(`/documents/${docId}/versions/${versionId}/signatures/${sigId}/verify/`),
+  getSignatures: (id) =>
+    api.get(`/documents/${id}/signatures/`),
   
-  downloadAuditExport: (docId, versionId) =>
-    api.get(`/documents/${docId}/versions/${versionId}/audit_export/`, {
+  verifySignature: (docId, sigId) =>
+    api.get(`/documents/${docId}/signatures/${sigId}/verify/`),
+  
+  downloadAuditExport: (id) =>
+    api.get(`/documents/${id}/audit_export/`, {
       responseType: 'blob'
     }),
-  
-  webhooks: {
-    list: () => api.get('/documents/webhooks/'),
-    
-    create: (data) => api.post('/documents/webhooks/', data),
-    
-    delete: (id) => api.delete(`/documents/webhooks/${id}/`),
-    
-    test: (id) => api.post(`/documents/webhooks/${id}/test/`),
-    
-    listEvents: (webhookId) => 
-      api.get(`/documents/webhooks/${webhookId}/events/`),
-    
-    getEventLogs: (eventId) => 
-      api.get(`/documents/webhook-events/${eventId}/logs/`),
-  },
 }
 
-// Signing token endpoints
+// ===== SIGNING TOKEN ENDPOINTS (✅ UPDATED: NO version_id) =====
 export const tokenAPI = {
-  create: (docId, versionId, tokenData) =>
-    api.post(`/documents/${docId}/versions/${versionId}/links/`, tokenData),
+  // ✅ UPDATED: docId only (no version_id)
+  create: (docId, tokenData) =>
+    api.post(`/documents/${docId}/links/`, tokenData),
   
   listForDocument: (docId) => api.get(`/documents/${docId}/links/`),
   
@@ -134,7 +117,7 @@ export const tokenAPI = {
     api.post('/documents/links/revoke/', { token }),
 }
 
-// Public signing endpoints (no auth)
+// ===== PUBLIC SIGNING ENDPOINTS (NO AUTH) =====
 export const publicAPI = {
   getSignPage: (token) =>
     api.get(`/documents/public/sign/${token}/`, {
@@ -146,11 +129,32 @@ export const publicAPI = {
       headers: { 'Authorization': '' },
     }),
   
-  downloadPublicVersion: (token) =>
+  downloadPublicDocument: (token) =>
     api.get(`/documents/public/download/${token}/`, {
       headers: { 'Authorization': '' },
       responseType: 'blob'
     }),
+}
+
+// ===== WEBHOOK ENDPOINTS =====
+export const webhookAPI = {
+  list: () => api.get('/documents/webhooks/'),
+  
+  create: (data) => api.post('/documents/webhooks/', data),
+  
+  get: (id) => api.get(`/documents/webhooks/${id}/`),
+  
+  update: (id, data) => api.patch(`/documents/webhooks/${id}/`, data),
+  
+  delete: (id) => api.delete(`/documents/webhooks/${id}/`),
+  
+  test: (id) => api.post(`/documents/webhooks/${id}/test/`),
+  
+  listEvents: (webhookId) => 
+    api.get(`/documents/webhooks/${webhookId}/events/`),
+  
+  getEventLogs: (eventId) => 
+    api.get(`/documents/webhook-events/${eventId}/logs/`),
 }
 
 export default api
