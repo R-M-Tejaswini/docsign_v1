@@ -1,33 +1,29 @@
 from django.contrib import admin
 from .models import (
-    Document, DocumentVersion, DocumentField,
+    Document, DocumentField,
     SigningToken, SignatureEvent
 )
 
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ('title', 'created_at', 'updated_at')
-    search_fields = ('title',)
-    list_filter = ('created_at',)
-    readonly_fields = ('created_at', 'updated_at')
-
-
-@admin.register(DocumentVersion)
-class DocumentVersionAdmin(admin.ModelAdmin):
-    list_display = ('document', 'version_number', 'status', 'page_count', 'created_at')
+    list_display = ('title', 'status', 'page_count', 'created_at', 'updated_at')
     list_filter = ('status', 'created_at')
-    search_fields = ('document__title',)
-    readonly_fields = ('version_number', 'page_count', 'created_at')
+    search_fields = ('title', 'description')
+    readonly_fields = ('page_count', 'signed_pdf_sha256', 'created_at', 'updated_at')
     fieldsets = (
-        ('Version Info', {
-            'fields': ('document', 'version_number', 'file')
+        ('Document Info', {
+            'fields': ('title', 'description', 'file')
         }),
-        ('Status', {
+        ('Status & Metadata', {
             'fields': ('status', 'page_count')
         }),
-        ('Metadata', {
-            'fields': ('created_at',),
+        ('Signing', {
+            'fields': ('signed_file', 'signed_pdf_sha256'),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
@@ -35,12 +31,13 @@ class DocumentVersionAdmin(admin.ModelAdmin):
 
 @admin.register(DocumentField)
 class DocumentFieldAdmin(admin.ModelAdmin):
-    list_display = ('label', 'version', 'field_type', 'recipient', 'locked', 'required')
-    list_filter = ('field_type', 'locked', 'required')
-    search_fields = ('label', 'version__document__title', 'recipient')
+    list_display = ('label', 'document', 'field_type', 'recipient', 'locked', 'required')
+    list_filter = ('field_type', 'locked', 'required', 'created_at')
+    search_fields = ('label', 'document__title', 'recipient')
+    readonly_fields = ('created_at',)
     fieldsets = (
         ('Field Info', {
-            'fields': ('version', 'field_type', 'label', 'recipient', 'required')
+            'fields': ('document', 'field_type', 'label', 'recipient', 'required')
         }),
         ('Position & Size', {
             'fields': ('page_number', 'x_pct', 'y_pct', 'width_pct', 'height_pct')
@@ -48,18 +45,22 @@ class DocumentFieldAdmin(admin.ModelAdmin):
         ('Value', {
             'fields': ('value', 'locked')
         }),
+        ('Timestamps', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
     )
 
 
 @admin.register(SigningToken)
 class SigningTokenAdmin(admin.ModelAdmin):
-    list_display = ('token_short', 'version', 'scope', 'recipient', 'used', 'revoked', 'created_at')
+    list_display = ('token_short', 'document', 'scope', 'recipient', 'used', 'revoked', 'created_at')
     list_filter = ('scope', 'used', 'revoked', 'created_at')
-    search_fields = ('token', 'version__document__title', 'recipient')
+    search_fields = ('token', 'document__title', 'recipient')
     readonly_fields = ('token', 'created_at')
     fieldsets = (
         ('Token Info', {
-            'fields': ('token', 'version', 'scope', 'recipient')
+            'fields': ('token', 'document', 'scope', 'recipient')
         }),
         ('Settings', {
             'fields': ('expires_at',)
@@ -81,16 +82,16 @@ class SigningTokenAdmin(admin.ModelAdmin):
 
 @admin.register(SignatureEvent)
 class SignatureEventAdmin(admin.ModelAdmin):
-    list_display = ('signer_name', 'recipient', 'version', 'signed_at', 'ip_address')
-    list_filter = ('signed_at',)
-    search_fields = ('signer_name', 'recipient', 'version__document__title', 'ip_address')
-    readonly_fields = ('document_sha256', 'signed_at')
+    list_display = ('signer_name', 'recipient', 'document', 'signed_at', 'ip_address')
+    list_filter = ('signed_at', 'recipient')
+    search_fields = ('signer_name', 'recipient', 'document__title', 'ip_address')
+    readonly_fields = ('document_sha256', 'event_hash', 'signed_at')
     fieldsets = (
         ('Signature Info', {
-            'fields': ('version', 'token', 'signer_name', 'recipient')
+            'fields': ('document', 'token', 'signer_name', 'recipient')
         }),
         ('Audit Data', {
-            'fields': ('signed_at', 'ip_address', 'user_agent', 'document_sha256')
+            'fields': ('signed_at', 'ip_address', 'user_agent', 'document_sha256', 'event_hash')
         }),
         ('Field Values', {
             'fields': ('field_values',),

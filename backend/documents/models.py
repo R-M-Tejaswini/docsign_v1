@@ -1,5 +1,8 @@
 """
 backend/documents/models.py
+
+CONSOLIDATED: Document now contains all properties previously split between
+Document and DocumentVersion. No more versioning—each document is independent.
 """
 
 # ----------------------------
@@ -30,51 +33,39 @@ from django.utils import timezone
 # ----------------------------
 # File upload helpers
 # ----------------------------
-def document_version_upload_path(instance, filename):
-    """Generate upload path for document version files."""
+def document_upload_path(instance, filename):
+    """Generate upload path for document files."""
     ext = os.path.splitext(filename)[1]
-    return f'documents/{instance.document_id}/v{instance.version_number}/{filename}'
+    return f'documents/{instance.id}/{filename}'
 
 
 # ----------------------------
 # Core models
 # ----------------------------
 class Document(models.Model):
-    """Document represents a signing workflow instance."""
+    """
+    Document represents a single, independent signing workflow instance.
+    
+    ✅ CONSOLIDATED: Combines all properties previously in Document + DocumentVersion.
+    - No version_number, no versioning semantics
+    - Each document is a complete, standalone entity
+    - status: draft → locked → partially_signed → completed
+    """
+    
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('locked', 'Locked for signing'),
+        ('partially_signed', 'Partially signed'),
+        ('completed', 'Fully signed'),
+    ]
+    
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     
-    class Meta:
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return self.title
-    
-    # ✅ NEW: Helper methods for webhook URLs
-    def get_download_url(self, version):
-        """Return the absolute download URL for a version."""
-        from django.conf import settings
-        return f'{settings.BASE_URL}/api/documents/{self.id}/versions/{version.id}/download/'
-    
-    def get_audit_url(self, version):
-        """Return the absolute audit export URL for a version."""
-        from django.conf import settings
-        return f'{settings.BASE_URL}/api/documents/{self.id}/versions/{version.id}/audit_export/'
-
-
-class DocumentVersion(models.Model):
-    """A version of a document representing a snapshot at a point in time."""
-    document = models.ForeignKey(
-        Document,
-        on_delete=models.CASCADE,
-        related_name='versions'
-    )
-    version_number = models.PositiveIntegerField(default=1)
-    file = models.FileField(upload_to=document_version_upload_path)
+    # ✅ CONSOLIDATED: File and metadata from DocumentVersion
+    file = models.FileField(upload_to=document_upload_path)
     signed_file = models.FileField(
-        upload_to=document_version_upload_path,
+        upload_to=document_upload_path,
         null=True,
         blank=True,
         help_text="Flattened PDF with all signatures and overlays merged"
@@ -89,43 +80,109 @@ class DocumentVersion(models.Model):
     
     status = models.CharField(
         max_length=20,
-        choices=[
-            ('draft', 'Draft'),
-            ('locked', 'Locked for signing'),
-            ('partially_signed', 'Partially signed'),
-            ('completed', 'Fully signed'),
-        ],
+        choices=STATUS_CHOICES,
         default='draft'
     )
     page_count = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1)])
+    
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        ordering = ['-version_number']
-        unique_together = ['document', 'version_number']
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+        ]
+    
+    def __str__(self):
+        return self.title
     
     def save(self, *args, **kwargs):
-        """Compute page count and auto-increment version number."""
-        if not self.pk or not self.version_number:
-            last_version = DocumentVersion.objects.filter(
-                document=self.document
-            ).order_by('-version_number').first()
-            self.version_number = (last_version.version_number + 1) if last_version else 1
-        
-            if self.file:
-                try:
-                    with self.file.open('rb') as f:
-                        reader = PdfReader(f)
-                        self.page_count = len(reader.pages)
-                except Exception as e:
-                    print(f"Error reading PDF: {e}")
-                    self.page_count = 1
+        """Compute page count from PDF on first save."""
+        if not self.pk and self.file:
+            try:
+                with self.file.open('rb') as f:
+                    reader = PdfReader(f)
+                    self.page_count = len(reader.pages)
+            except Exception as e:
+                print(f"Error reading PDF: {e}")
+                self.page_count = 1
         
         super().save(*args, **kwargs)
+    
+    def duplicate(self):
+        """
+        Create a new independent Document by duplicating this one.
+        
+        ✅ NEW: Replaces copy_version() concept
+        - Creates a completely new Document with same file and fields
+        - New document has fresh ID, independent status
+        - All fields are duplicated (unlocked, in draft state)
+        - No relationship or version chain
+        
+        Returns:
+            Document: The newly created duplicate document
+        """
+        from django.core.files.base import ContentFile
+        
+        # Read the original file
+        with self.file.open('rb') as f:
+            file_content = f.read()
+        
+        # Create new document
+        new_doc = Document.objects.create(
+            title=f"{self.title} (Copy)",
+            description=self.description,
+            status='draft',
+            page_count=self.page_count
+        )
+        
+        # Save file to new document
+        filename = os.path.basename(self.file.name)
+        new_doc.file.save(filename, ContentFile(file_content), save=True)
+        
+        # Duplicate all fields (unlocked, in draft state)
+        new_fields = []
+        for field in self.fields.all():
+            new_fields.append(
+                DocumentField(
+                    document=new_doc,
+                    field_type=field.field_type,
+                    label=field.label,
+                    recipient=field.recipient,
+                    page_number=field.page_number,
+                    x_pct=field.x_pct,
+                    y_pct=field.y_pct,
+                    width_pct=field.width_pct,
+                    height_pct=field.height_pct,
+                    required=field.required,
+                    locked=False,  # Reset to unlocked
+                    value=None  # Clear values
+                )
+            )
+        
+        if new_fields:
+            DocumentField.objects.bulk_create(new_fields)
+        
+        return new_doc
+    
+    def get_download_url(self):
+        """Return the absolute download URL for this document."""
+        from django.conf import settings
+        return f'{settings.BASE_URL}/api/documents/{self.id}/download/'
+    
+    def get_audit_url(self):
+        """Return the absolute audit export URL for this document."""
+        from django.conf import settings
+        return f'{settings.BASE_URL}/api/documents/{self.id}/audit_export/'
 
 
 class DocumentField(models.Model):
-    """DocumentField is a field instance on a specific document version."""
+    """
+    DocumentField is a field instance on a document.
+    
+    ✅ CONSOLIDATED: Now points directly to Document (not DocumentVersion)
+    """
     FIELD_TYPES = [
         ('text', 'Text'),
         ('signature', 'Signature'),
@@ -133,8 +190,8 @@ class DocumentField(models.Model):
         ('checkbox', 'Checkbox'),
     ]
     
-    version = models.ForeignKey(
-        DocumentVersion,
+    document = models.ForeignKey(
+        Document,
         on_delete=models.CASCADE,
         related_name='fields'
     )
@@ -159,11 +216,13 @@ class DocumentField(models.Model):
         help_text="Field is locked after signing and cannot be edited"
     )
     
+    created_at = models.DateTimeField(auto_now_add=True)
+    
     class Meta:
         ordering = ['page_number', 'y_pct', 'x_pct']
     
     def __str__(self):
-        return f"{self.label} ({self.recipient}) - {self.version}"
+        return f"{self.label} ({self.recipient})"
     
     def clean(self):
         """Validate recipient is assigned."""
@@ -172,15 +231,19 @@ class DocumentField(models.Model):
 
 
 class SigningToken(models.Model):
-    """SigningToken controls access to sign or view a document version."""
+    """
+    SigningToken controls access to sign or view a document.
+    
+    ✅ CONSOLIDATED: Now points directly to Document (not DocumentVersion)
+    """
     SCOPE_CHOICES = [
         ('view', 'View Only'),
         ('sign', 'Sign'),
     ]
     
     token = models.CharField(max_length=64, unique=True, db_index=True)
-    version = models.ForeignKey(
-        DocumentVersion,
+    document = models.ForeignKey(
+        Document,
         on_delete=models.CASCADE,
         related_name='tokens'
     )
@@ -201,7 +264,7 @@ class SigningToken(models.Model):
         ordering = ['-created_at']
         constraints = [
             models.UniqueConstraint(
-                fields=['version', 'recipient', 'scope'],
+                fields=['document', 'recipient', 'scope'],
                 condition=models.Q(scope='sign', revoked=False, used=False),
                 name='unique_active_sign_token_per_recipient'
             )
@@ -218,9 +281,13 @@ class SigningToken(models.Model):
 
 
 class SignatureEvent(models.Model):
-    """SignatureEvent records each signing action by a recipient."""
-    version = models.ForeignKey(
-        DocumentVersion,
+    """
+    SignatureEvent records each signing action by a recipient.
+    
+    ✅ CONSOLIDATED: Now points directly to Document (not DocumentVersion)
+    """
+    document = models.ForeignKey(
+        Document,
         on_delete=models.CASCADE,
         related_name='signatures'
     )
@@ -262,7 +329,7 @@ class SignatureEvent(models.Model):
         ordering = ['-signed_at']
     
     def __str__(self):
-        return f"{self.signer_name} ({self.recipient}) signed {self.version} on {self.signed_at}"
+        return f"{self.signer_name} ({self.recipient}) signed on {self.signed_at}"
 
 
 @receiver(post_save, sender=SignatureEvent)

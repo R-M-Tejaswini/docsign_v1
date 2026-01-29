@@ -1,9 +1,7 @@
 """
 Signature event business logic service layer.
 
-Responsibilities:
-- Compute event hashes for tamper detection
-- Create and verify signature events
+✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
 """
 
 from django.utils import timezone
@@ -15,58 +13,23 @@ class SignatureService:
     
     @staticmethod
     def compute_event_hash(signature_event):
-        """
-        Compute tamper-evident hash for a signature event.
-        
-        Uses HashingService for stable JSON hashing to ensure consistency.
-        
-        Args:
-            signature_event: SignatureEvent instance
-            
-        Returns:
-            str: Hexadecimal SHA256 hash
-        """
-        # ✅ UPDATED: Delegate to HashingService instead of inline implementation
+        """Compute tamper-evident hash for a signature event."""
         return HashingService.compute_event_hash(signature_event)
     
     @staticmethod
     def is_signature_valid(signature_event):
-        """
-        Check if stored event_hash matches a recomputed hash.
-        
-        Args:
-            signature_event: SignatureEvent instance
-            
-        Returns:
-            bool: True if valid, False if tampered or no hash exists
-        """
+        """Check if stored event_hash matches a recomputed hash."""
         if not signature_event.event_hash:
             return False
         current_hash = SignatureService.compute_event_hash(signature_event)
         return current_hash == signature_event.event_hash
     
     @staticmethod
-    def verify_signature_integrity(signature_event, version):
+    def verify_signature_integrity(signature_event, document):
         """
         Verify complete integrity of a signature event.
         
-        Checks:
-        - Event hash matches (event not tampered)
-        - Document hash at sign time matches PDF (PDF not tampered)
-        - Signed PDF hash matches (flattened PDF not tampered)
-        
-        Args:
-            signature_event: SignatureEvent instance
-            version: DocumentVersion instance
-            
-        Returns:
-            dict: {
-                'valid': bool,
-                'event_hash_valid': bool,
-                'document_hash_valid': bool,
-                'signed_pdf_hash_valid': bool,
-                'details': dict
-            }
+        ✅ CONSOLIDATED: Now works with Document directly
         """
         from .document_service import DocumentService
         
@@ -76,15 +39,15 @@ class SignatureService:
         event_hash_valid = current_event_hash == stored_event_hash
         
         # Check document hash
-        current_pdf_hash = DocumentService.compute_sha256(version)
+        current_pdf_hash = DocumentService.compute_sha256(document)
         stored_pdf_hash = signature_event.document_sha256
         document_hash_valid = current_pdf_hash == stored_pdf_hash
         
         # Check signed PDF hash
         signed_pdf_valid = True
-        if version.signed_file and version.signed_pdf_sha256:
-            current_signed_pdf_hash = DocumentService.compute_signed_pdf_hash(version)
-            signed_pdf_valid = current_signed_pdf_hash == version.signed_pdf_sha256
+        if document.signed_file and document.signed_pdf_sha256:
+            current_signed_pdf_hash = DocumentService.compute_signed_pdf_hash(document)
+            signed_pdf_valid = current_signed_pdf_hash == document.signed_pdf_sha256
         
         is_valid = event_hash_valid and document_hash_valid and signed_pdf_valid
         
@@ -103,16 +66,14 @@ class SignatureService:
                     'current': current_pdf_hash,
                 },
                 'signed_pdf_hash': {
-                    'stored': version.signed_pdf_sha256,
-                    'current': DocumentService.compute_signed_pdf_hash(version) if version.signed_file else None,
+                    'stored': document.signed_pdf_sha256,
+                    'current': DocumentService.compute_signed_pdf_hash(document) if document.signed_file else None,
                 }
             }
         }
 
 
-# Singleton instance
 _signature_service = None
-
 
 def get_signature_service() -> SignatureService:
     """Get singleton instance of signature service."""

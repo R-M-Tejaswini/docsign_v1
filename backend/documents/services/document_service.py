@@ -1,11 +1,7 @@
 """
 Document business logic service layer.
 
-Responsibilities:
-- Compute hashes and signatures
-- Manage document and version status
-- Generate recipient information
-- Handle version copying
+✅ CONSOLIDATED: Updated to work directly with Document (no DocumentVersion)
 """
 
 from django.db import models as django_models
@@ -15,34 +11,26 @@ from .hashing import HashingService
 
 
 class DocumentService:
-    """Service for document and version business logic."""
+    """Service for document business logic."""
     
     @staticmethod
-    def get_recipients(version):
+    def get_recipients(document):
         """
-        Get list of unique recipients assigned to fields in a version.
+        Get list of unique recipients assigned to fields in a document.
         
-        Args:
-            version: DocumentVersion instance
-            
-        Returns:
-            list: Sorted list of unique recipient identifiers
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        recipients = version.fields.values_list('recipient', flat=True).distinct()
+        recipients = document.fields.values_list('recipient', flat=True).distinct()
         return sorted([r for r in recipients if r and r.strip()])
     
     @staticmethod
-    def get_recipient_status(version):
+    def get_recipient_status(document):
         """
         Get signing status per recipient.
         
-        Args:
-            version: DocumentVersion instance
-            
-        Returns:
-            dict: Maps recipient -> {total, signed, completed}
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        all_fields = list(version.fields.all())
+        all_fields = list(document.fields.all())
         recipients = set(f.recipient for f in all_fields if f.recipient and f.recipient.strip())
         status = {}
         
@@ -62,36 +50,25 @@ class DocumentService:
         return status
     
     @staticmethod
-    def can_generate_sign_link(version, recipient):
+    def can_generate_sign_link(document, recipient):
         """
         Check if a sign link can be generated for a specific recipient.
         
-        Rules:
-        - Document must be locked (not draft)
-        - Recipient must have fields assigned
-        - Recipient must not have already signed
-        - No active sign token for this recipient
-        
-        Args:
-            version: DocumentVersion instance
-            recipient: str, recipient identifier
-            
-        Returns:
-            tuple: (bool, error_message_or_None)
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        if version.status == 'draft':
+        if document.status == 'draft':
             return False, "Document must be locked before generating sign links"
         
-        recipient_fields = version.fields.filter(recipient=recipient)
+        recipient_fields = document.fields.filter(recipient=recipient)
         if not recipient_fields.exists():
             return False, f"No fields assigned to {recipient}"
         
-        recipient_status = DocumentService.get_recipient_status(version)
+        recipient_status = DocumentService.get_recipient_status(document)
         if recipient in recipient_status and recipient_status[recipient]['completed']:
             return False, f"{recipient} has already completed signing"
         
         # Check if active sign token exists
-        active_token = version.tokens.filter(
+        active_token = document.tokens.filter(
             recipient=recipient,
             scope='sign',
             revoked=False
@@ -105,118 +82,91 @@ class DocumentService:
         return True, None
     
     @staticmethod
-    def can_generate_view_link(version):
+    def can_generate_view_link(document):
         """
-        Check if a view link can be generated for the version.
+        Check if a view link can be generated for the document.
         
-        Rules:
-        - Document must not be in draft status
-        
-        Args:
-            version: DocumentVersion instance
-            
-        Returns:
-            tuple: (bool, error_message_or_None)
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        if version.status == 'draft':
+        if document.status == 'draft':
             return False, "Document must be locked before generating view links"
         return True, None
     
     @staticmethod
-    def compute_sha256(version):
+    def compute_sha256(document):
         """
         Compute SHA256 hash of the PDF file.
         
-        Args:
-            version: DocumentVersion instance
-            
-        Returns:
-            str: Hexadecimal SHA256 hash
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        # ✅ UPDATED: Use HashingService instead of inline implementation
-        return HashingService.compute_file_sha256(version.file)
+        return HashingService.compute_file_sha256(document.file)
     
     @staticmethod
-    def compute_signed_pdf_hash(version):
+    def compute_signed_pdf_hash(document):
         """
         Compute SHA256 hash of the signed/flattened PDF file.
         
-        Args:
-            version: DocumentVersion instance
-            
-        Returns:
-            str: Hexadecimal hash or None on error/missing file
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        if not version.signed_file:
+        if not document.signed_file:
             return None
         
         try:
-            # ✅ UPDATED: Use HashingService instead of inline implementation
-            return HashingService.compute_file_sha256(version.signed_file)
+            return HashingService.compute_file_sha256(document.signed_file)
         except Exception as e:
             print(f"❌ Error computing signed PDF hash: {e}")
             return None
     
     @staticmethod
-    def update_signed_pdf_hash(version):
+    def update_signed_pdf_hash(document):
         """
         Update signed_pdf_sha256 field after flattening.
         
-        Args:
-            version: DocumentVersion instance
+        ✅ CONSOLIDATED: Now operates on Document directly
         """
-        version.signed_pdf_sha256 = DocumentService.compute_signed_pdf_hash(version)
-        version.save(update_fields=['signed_pdf_sha256'])
+        document.signed_pdf_sha256 = DocumentService.compute_signed_pdf_hash(document)
+        document.save(update_fields=['signed_pdf_sha256'])
     
     @staticmethod
-    def update_version_status(version):
+    def update_document_status(document):
         """
         Update document status based on recipient completion.
         
-        Behavior:
-        - draft: stays draft until manually locked
-        - locked: marked locked when no signatures present
-        - partially_signed: some recipients signed, others haven't
-        - completed: all recipients completed their required fields
-        
-        Auto-generates signed PDF when moved to 'completed'.
-        
-        Args:
-            version: DocumentVersion instance
+        ✅ CONSOLIDATED: Now operates on Document directly
+        - Removed version concept
+        - Auto-generates signed PDF when moved to 'completed'
         """
-        if version.status == 'draft':
+        if document.status == 'draft':
             return
         
-        recipient_status = DocumentService.get_recipient_status(version)
+        recipient_status = DocumentService.get_recipient_status(document)
         
         if not recipient_status:
-            version.status = 'completed'
+            document.status = 'completed'
         else:
             all_completed = all(rs['completed'] for rs in recipient_status.values())
             any_signed = any(rs['signed'] > 0 for rs in recipient_status.values())
             
             if all_completed:
-                version.status = 'completed'
+                document.status = 'completed'
             elif any_signed:
-                version.status = 'partially_signed'
+                document.status = 'partially_signed'
             else:
-                version.status = 'locked'
+                document.status = 'locked'
         
-        version.save(update_fields=['status'])
+        document.save(update_fields=['status'])
         
         # Auto-generate signed PDF when completed
-        if version.status == 'completed' and not version.signed_file:
+        if document.status == 'completed' and not document.signed_file:
             try:
                 from . import get_pdf_flattening_service
                 service = get_pdf_flattening_service()
-                service.flatten_and_save(version)
+                service.flatten_and_save(document)
             except Exception as e:
                 print(f"⚠️  Failed to auto-generate signed PDF: {e}")
 
 
-# Singleton instance
 _document_service = None
-
 
 def get_document_service() -> DocumentService:
     """Get singleton instance of document service."""

@@ -1,3 +1,8 @@
+/**
+ * ✅ CONSOLIDATED: Removed version concept
+ * Now generates tokens directly for documents (no version_id)
+ */
+
 import { useState, useEffect } from 'react'
 import { Modal } from '../ui/Modal'
 import { Button } from '../ui/Button'
@@ -5,26 +10,30 @@ import { useApi } from '../../hooks/useApi'
 import { tokenAPI, documentAPI } from '../../services/api'
 import { getRecipientBadgeClasses } from '../../utils/recipientColors'
 
-export const GenerateLinkModal = ({ isOpen, onClose, document, version, onSuccess }) => {
+// ✅ UPDATED: Removed version prop from function signature
+export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {
   const [linkType, setLinkType] = useState('sign')
   const [selectedRecipient, setSelectedRecipient] = useState('')
   const [expiresInDays, setExpiresInDays] = useState(7)
   const [availableRecipients, setAvailableRecipients] = useState([])
   const [loading, setLoading] = useState(false)
 
+  // ✅ UPDATED: Only document.id (no version.id)
   const { execute: createToken } = useApi((data) =>
-    tokenAPI.create(document.id, version.id, data)
+    tokenAPI.create(document.id, data)
   )
 
+  // ✅ UPDATED: Only document.id (no version.id)
   const { execute: getRecipients } = useApi(() =>
-    documentAPI.getAvailableRecipients(document.id, version.id)
+    documentAPI.getAvailableRecipients(document.id)
   )
 
+  // ✅ UPDATED: Removed version?.id dependency
   useEffect(() => {
-    if (isOpen && version) {
+    if (isOpen && document) {
       loadAvailableRecipients()
     }
-  }, [isOpen, version?.id])
+  }, [isOpen, document?.id])
 
   const loadAvailableRecipients = async () => {
     try {

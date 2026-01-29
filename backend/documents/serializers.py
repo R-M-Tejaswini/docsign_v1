@@ -10,7 +10,7 @@ from rest_framework import serializers
 
 from templates.models import TemplateField
 from .models import (
-    Document, DocumentVersion, DocumentField,
+    Document, DocumentField,
     SigningToken, SignatureEvent, Webhook, WebhookEvent, WebhookDeliveryLog
 )
 
@@ -60,6 +60,8 @@ class SignatureEventSerializer(serializers.ModelSerializer):
     """Serializer for SignatureEvent."""
     signer_name_display = serializers.CharField(source='signer_name', read_only=True)
     is_verified = serializers.SerializerMethodField()
+    # ✅ ADDED: Explicitly define ip_address field
+    ip_address = serializers.CharField(allow_null=True, allow_blank=True, read_only=True)
     
     class Meta:
         model = SignatureEvent
@@ -77,39 +79,25 @@ class SignatureEventSerializer(serializers.ModelSerializer):
         return service.is_signature_valid(obj)
 
 
-class DocumentVersionSerializer(serializers.ModelSerializer):
-    """Serializer for DocumentVersion."""
-    document_id = serializers.SerializerMethodField()
-    document_title = serializers.SerializerMethodField()
-    document_description = serializers.SerializerMethodField()
+class DocumentSerializer(serializers.ModelSerializer):
+    """Unified Document serializer replacing DocumentVersion serializers."""
     file_url = serializers.SerializerMethodField()
     signed_file_url = serializers.SerializerMethodField()
     recipients = serializers.SerializerMethodField()
     recipient_status = serializers.SerializerMethodField()
     fields = DocumentFieldSerializer(many=True, read_only=True)
     signatures = SignatureEventSerializer(many=True, read_only=True)
-    signed_pdf_sha256 = serializers.CharField(read_only=True)
     
     class Meta:
-        model = DocumentVersion
+        model = Document
         fields = [
-            'id', 'version_number', 'status', 'page_count', 'created_at',
+            'id', 'title', 'description', 'status', 'page_count', 'created_at', 'updated_at',
             'file', 'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
-            'document_id', 'document_title', 'document_description', 'signatures',
-            'signed_pdf_sha256'
+            'signatures', 'signed_pdf_sha256'
         ]
-    
-    def get_document_id(self, obj):
-        return obj.document.id
-    
-    def get_document_title(self, obj):
-        return obj.document.title
-    
-    def get_document_description(self, obj):
-        return obj.document.description
+        read_only_fields = ['id', 'created_at', 'updated_at', 'signed_pdf_sha256', 'file_url', 'signed_file_url']
     
     def get_file_url(self, obj):
-        """Return absolute file URL if request in context."""
         if obj.file:
             request = self.context.get('request')
             if request:
@@ -118,7 +106,6 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         return None
     
     def get_signed_file_url(self, obj):
-        """Return signed file URL."""
         if obj.signed_file:
             request = self.context.get('request')
             if request:
@@ -127,89 +114,118 @@ class DocumentVersionSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
-        """
-        Return deduplicated recipients list.
-        
-        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
-        Falls back to service call if not available (backwards compatible).
-        """
-        # Check if viewset pre-computed this
         if hasattr(obj, '_recipients_cache'):
             return obj._recipients_cache
-        
         from .services import get_document_service
         service = get_document_service()
         return service.get_recipients(obj)
     
     def get_recipient_status(self, obj):
-        """
-        Return recipient signing status mapping.
-        
-        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
-        Falls back to service call if not available (backwards compatible).
-        """
-        # Check if viewset pre-computed this
         if hasattr(obj, '_recipient_status_cache'):
             return obj._recipient_status_cache
-        
+        from .services import get_document_service
+        service = get_document_service()
+        return service.get_recipient_status(obj)
+
+
+class DocumentListSerializer(serializers.ModelSerializer):
+    """Serializer for document list views."""
+    file_url = serializers.SerializerMethodField()
+    recipients = serializers.SerializerMethodField()
+    recipient_status = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Document
+        fields = [
+            'id', 'title', 'description', 'status', 'page_count',
+            'created_at', 'updated_at',
+            'file_url', 'recipients', 'recipient_status'  # ✅ ADDED
+        ]
+        read_only_fields = fields
+    
+    def get_file_url(self, obj):
+        """Get absolute URL for document file."""
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+    
+    def get_recipients(self, obj):
+        """Get all unique recipients from fields."""
+        return list(obj.fields.values_list('recipient', flat=True).distinct())
+    
+    def get_recipient_status(self, obj):
+        """Get signing status per recipient."""
         from .services import get_document_service
         service = get_document_service()
         return service.get_recipient_status(obj)
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):
-    """Detailed serializer for Document."""
-    latest_version = serializers.SerializerMethodField()
+    """Detailed view for single document."""
+    file_url = serializers.SerializerMethodField()
+    signed_file_url = serializers.SerializerMethodField()
+    recipients = serializers.SerializerMethodField()
+    recipient_status = serializers.SerializerMethodField()
+    fields = DocumentFieldSerializer(many=True, read_only=True)
+    signatures = SignatureEventSerializer(many=True, read_only=True)
     
     class Meta:
         model = Document
-        fields = ['id', 'title', 'description', 'created_at', 'updated_at', 'latest_version']
+        fields = [
+            'id', 'title', 'description', 'status', 'page_count', 'created_at', 'updated_at',
+            'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
+            'signatures', 'signed_pdf_sha256'
+        ]
+        read_only_fields = fields
     
-    def get_latest_version(self, obj):
-        """Return serialized latest version."""
-        latest = obj.versions.order_by('-version_number').first()
-        if latest:
-            return DocumentVersionSerializer(latest, context={'request': self.context.get('request')}).data
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
         return None
-
-
-class DocumentListSerializer(serializers.ModelSerializer):
-    """Compact serializer for listing Documents."""
-    status = serializers.SerializerMethodField()
-    version_count = serializers.SerializerMethodField()
     
-    class Meta:
-        model = Document
-        fields = ['id', 'title', 'description', 'status', 'version_count', 'created_at']
-        read_only_fields = ['id', 'created_at']
+    def get_signed_file_url(self, obj):
+        if obj.signed_file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.signed_file.url)
+            return obj.signed_file.url
+        return None
     
-    def get_status(self, obj):
-        """Return status of the latest version."""
-        latest = obj.versions.order_by('-version_number').first()
-        return latest.status if latest else 'draft'
+    def get_recipients(self, obj):
+        if hasattr(obj, '_recipients_cache'):
+            return obj._recipients_cache
+        from .services import get_document_service
+        service = get_document_service()
+        return service.get_recipients(obj)
     
-    def get_version_count(self, obj):
-        """Return count of versions."""
-        return obj.versions.count()
+    def get_recipient_status(self, obj):
+        if hasattr(obj, '_recipient_status_cache'):
+            return obj._recipient_status_cache
+        from .services import get_document_service
+        service = get_document_service()
+        return service.get_recipient_status(obj)
 
 
 class DocumentCreateSerializer(serializers.Serializer):
-    """Serializer for creating a Document and its initial version."""
+    """Create document from file or template."""
     title = serializers.CharField(max_length=255)
     description = serializers.CharField(required=False, allow_blank=True)
     template_id = serializers.IntegerField(required=False, allow_null=True)
     file = serializers.FileField(required=False, allow_null=True)
     
     def validate(self, data):
-        """Ensure either template_id or file is provided."""
         if not data.get('template_id') and not data.get('file'):
-            raise serializers.ValidationError(
-                'Either template_id or file must be provided'
-            )
+            raise serializers.ValidationError('Either template_id or file must be provided')
         return data
     
     def create(self, validated_data):
-        """Create Document and a single initial DocumentVersion."""
+        """✅ CONSOLIDATED: Creates Document only (no more version)"""
         from templates.models import Template
         
         template_id = validated_data.pop('template_id', None)
@@ -219,17 +235,14 @@ class DocumentCreateSerializer(serializers.Serializer):
         
         if template_id:
             template = Template.objects.get(id=template_id)
-            version = DocumentVersion.objects.create(
-                document=document,
-                file=template.file,
-                status='draft'
-            )
+            document.file = template.file
+            document.save()
             
             fields_to_create = []
             for tfield in template.fields.all():
                 fields_to_create.append(
                     DocumentField(
-                        version=version,
+                        document=document,
                         field_type=tfield.field_type,
                         label=tfield.label,
                         recipient=tfield.recipient,
@@ -243,142 +256,60 @@ class DocumentCreateSerializer(serializers.Serializer):
                 )
             if fields_to_create:
                 DocumentField.objects.bulk_create(fields_to_create)
-
         elif file:
-            version = DocumentVersion.objects.create(
-                document=document,
-                file=file,
-                status='draft'
-            )
-    
+            document.file = file
+            document.save()
+        
         return document
 
 
 class SigningTokenSerializer(serializers.ModelSerializer):
-    """
-    Unified serializer for SigningToken (list, create, retrieve, update).
-    
-    ✅ CONSOLIDATED: Replaces both SigningTokenSerializer and SigningTokenCreateSerializer.
-    
-    Behavior:
-    - For GET (list/retrieve): Returns full token details with computed fields
-    - For POST (create): Accepts scope/recipient/expires_in_days, validates via create()
-    - For PATCH (update): Not commonly used but supported if needed
-    
-    Why:
-    - Single source of truth for token serialization
-    - Reduces code duplication and cognitive load
-    - DRY principle: no need to maintain two similar serializers
-    """
+    """✅ CONSOLIDATED: Updated to use Document instead of DocumentVersion"""
     public_url = serializers.SerializerMethodField()
-    signatures = serializers.SerializerMethodField()
-    version_id = serializers.IntegerField(source='version.id', read_only=True)
+    document_id = serializers.IntegerField(source='document.id', read_only=True)
     recipient_status = serializers.SerializerMethodField()
     
-    # Fields used only during creation
-    scope = serializers.ChoiceField(
-        choices=['view', 'sign'],
-        write_only=False  # Visible in all contexts
-    )
-    recipient = serializers.CharField(
-        max_length=100,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-        help_text="Recipient identifier for sign tokens (required for sign scope)"
-    )
-    expires_in_days = serializers.IntegerField(
-        required=False,
-        allow_null=True,
-        min_value=1,
-        write_only=True,  # Only visible during creation
-        help_text="Days until token expiry"
-    )
+    # Fields for creation
+    scope = serializers.ChoiceField(choices=['view', 'sign'], write_only=False)
+    recipient = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
+    expires_in_days = serializers.IntegerField(required=False, allow_null=True, min_value=1, write_only=True)
     
     class Meta:
         model = SigningToken
         fields = [
-            'id', 'token', 'version_id', 'scope', 'recipient', 'used',
-            'revoked', 'expires_at', 'created_at', 'public_url', 
-            'signatures', 'recipient_status', 'expires_in_days'
+            'id', 'token', 'document_id', 'scope', 'recipient', 'used', 'revoked',
+            'expires_at', 'created_at', 'public_url', 'recipient_status', 'expires_in_days'
         ]
-        read_only_fields = [
-            'id', 'token', 'used', 'created_at', 'public_url', 
-            'signatures', 'version_id', 'recipient_status', 'expires_at'
-        ]
+        read_only_fields = ['id', 'token', 'used', 'created_at', 'public_url', 'document_id', 'recipient_status', 'expires_at']
     
     def validate(self, data):
-        """
-        Validate token creation constraints.
-        
-        Only called during POST (create) operations because other fields are read_only.
-        """
-        # Only validate if this is a create operation (no instance)
-        if self.instance is None:
-            scope = data.get('scope')
-            recipient = data.get('recipient')
-            
-            # Sign tokens must have a recipient
-            if scope == 'sign' and not recipient:
-                raise serializers.ValidationError({
-                    'recipient': 'Recipient must be specified for sign links'
-                })
-        
+        if self.instance is None:  # create only
+            if data.get('scope') == 'sign' and not data.get('recipient'):
+                raise serializers.ValidationError({'recipient': 'Recipient required for sign links'})
         return data
     
     def create(self, validated_data):
-        """
-        Create a new SigningToken.
-        
-        ✅ CONSOLIDATED: Replaces SigningTokenCreateSerializer.create()
-        
-        Extracts version from context (set by viewset) and delegates to TokenService.
-        """
         from .services import get_token_service
-        
-        version = self.context.get('version')
-        if not version:
-            raise serializers.ValidationError(
-                'Version context is required to create a token'
-            )
-        
-        expires_in_days = validated_data.pop('expires_in_days', None)
+        document = self.context.get('document')
         
         service = get_token_service()
         token = service.generate_token(
-            version=version,
+            document=document,
             scope=validated_data.get('scope', 'view'),
             recipient=validated_data.get('recipient'),
-            expires_in_days=expires_in_days
+            expires_in_days=validated_data.get('expires_in_days')
         )
         return token
     
     def get_public_url(self, obj):
-        """Return the frontend URL where the recipient would sign/view the document."""
         base_url = settings.FRONTEND_BASE_URL
         return f'{base_url}/sign/{obj.token}'
     
-    def get_signatures(self, obj):
-        """Return serialized signatures that were created using this token."""
-        signature_events = obj.signature_events.all()
-        return SignatureEventSerializer(signature_events, many=True).data
-    
     def get_recipient_status(self, obj):
-        """
-        Return the recipient-specific status mapping.
-        
-        ✅ OPTIMIZATION: Check if already computed (from viewset prefetch).
-        Falls back to service call if not available (backwards compatible).
-        """
         if obj.scope == 'sign' and obj.recipient:
-            # Check if version has cached data
-            if hasattr(obj.version, '_recipient_status_cache'):
-                status = obj.version._recipient_status_cache
-            else:
-                from .services import get_document_service
-                service = get_document_service()
-                status = service.get_recipient_status(obj.version)
-            
+            from .services import get_document_service
+            service = get_document_service()
+            status = service.get_recipient_status(obj.document)
             return status.get(obj.recipient, None)
         return None
 
@@ -406,7 +337,7 @@ class PublicSignResponseSerializer(serializers.Serializer):
     """Serializer for the response after successful signing."""
     signature_id = serializers.IntegerField()
     message = serializers.CharField()
-    version_status = serializers.CharField()
+    document_status = serializers.CharField()  # ✅ FIXED: Changed from 'version_status'
     recipient = serializers.CharField()
     link_converted_to_view = serializers.BooleanField()
 

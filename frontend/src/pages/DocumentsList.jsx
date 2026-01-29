@@ -1,3 +1,10 @@
+/**
+ * ✅ CONSOLIDATED: Removed version concept
+ * - No more version_number display
+ * - "Copy Version" → "Duplicate Document"
+ * - Simplified document list
+ */
+
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Button } from '../components/ui/Button'
@@ -9,23 +16,28 @@ import { getRecipientBadgeClasses } from '../utils/recipientColors'
 export const DocumentsList = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const [documentVersions, setDocumentVersions] = useState([])
+  // ✅ UPDATED: documentVersions → documents
+  const [documents, setDocuments] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newDocTitle, setNewDocTitle] = useState('')
   const [newDocFile, setNewDocFile] = useState(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [templates, setTemplates] = useState([])
-  const [copyingVersionId, setCopyingVersionId] = useState(null)
-  const [downloadingVersionId, setDownloadingVersionId] = useState(null)
+  // ✅ UPDATED: copyingVersionId → duplicatingDocId
+  const [duplicatingDocId, setDuplicatingDocId] = useState(null)
+  // ✅ UPDATED: downloadingVersionId → downloadingDocId
+  const [downloadingDocId, setDownloadingDocId] = useState(null)
   const [createMode, setCreateMode] = useState('template')
   
   const { execute: listDocuments, loading } = useApi(() => documentAPI.list())
   const { execute: createDocument } = useApi((data) => documentAPI.create(data))
-  const { execute: copyDocumentVersion } = useApi((docId, versionId) =>
-    documentAPI.copyVersion(docId, versionId)
+  // ✅ UPDATED: copyDocumentVersion → duplicateDocument (no version_id param)
+  const { execute: duplicateDocument } = useApi((docId) =>
+    documentAPI.duplicate(docId)
   )
-  const { execute: downloadVersion } = useApi((docId, versionId) =>
-    documentAPI.downloadVersion(docId, versionId)
+  // ✅ UPDATED: downloadVersion → downloadDocument (no version_id param)
+  const { execute: downloadDocument } = useApi((docId) =>
+    documentAPI.download(docId)
   )
 
   useEffect(() => {
@@ -35,20 +47,27 @@ export const DocumentsList = () => {
 
   const loadDocuments = async () => {
     try {
-      const axiosResponse = await documentAPI.getVersions()
-      const response = axiosResponse.data || axiosResponse
+      const axiosResponse = await listDocuments()
+      const response = axiosResponse
       
-      let versionsArray = []
+      let docsArray = []
       if (response && typeof response === 'object') {
         if (Array.isArray(response)) {
-          versionsArray = response
+          docsArray = response
         } else if (response.results && Array.isArray(response.results)) {
-          versionsArray = response.results
+          docsArray = response.results
         }
       }
       
-      versionsArray.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-      setDocumentVersions(versionsArray)
+      // ✅ DEBUG: Log the structure
+      if (docsArray.length > 0) {
+        console.log('First document:', docsArray[0])
+        console.log('Recipients:', docsArray[0].recipients)
+        console.log('Recipient Status:', docsArray[0].recipient_status)
+      }
+      
+      docsArray.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      setDocuments(docsArray)
     } catch (err) {
       console.error('Failed to load documents:', err)
     }
@@ -114,28 +133,32 @@ export const DocumentsList = () => {
     }
   }
 
-  const handleCopyVersion = async (documentId, versionId) => {
+  // ✅ UPDATED: handleCopyVersion → handleDuplicateDocument
+  const handleDuplicateDocument = async (documentId, documentTitle) => {
     try {
-      setCopyingVersionId(versionId)
-      await copyDocumentVersion(documentId, versionId)
+      setDuplicatingDocId(documentId)
+      // ✅ UPDATED: Call duplicateDocument (no version_id)
+      const newDoc = await duplicateDocument(documentId)
       await loadDocuments()
-      navigate(`/documents/${documentId}`)
+      navigate(`/documents/${newDoc.id}`)
     } catch (err) {
-      alert('Failed to copy version: ' + (err.response?.data?.error || err.message))
+      alert('Failed to duplicate document: ' + (err.response?.data?.error || err.message))
     } finally {
-      setCopyingVersionId(null)
+      setDuplicatingDocId(null)
     }
   }
 
-  const handleDownloadVersion = async (documentTitle, versionId, documentId) => {
+  // ✅ UPDATED: handleDownloadVersion → handleDownloadDocument
+  const handleDownloadDocument = async (documentTitle, documentId) => {
     try {
-      setDownloadingVersionId(versionId)
-      const blob = await downloadVersion(documentId, versionId)
+      setDownloadingDocId(documentId)
+      // ✅ UPDATED: Call downloadDocument (no version_id)
+      const blob = await downloadDocument(documentId)
       
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${documentTitle}_v${versionId}_signed.pdf`
+      link.download = `${documentTitle}_signed.pdf`
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
@@ -143,7 +166,7 @@ export const DocumentsList = () => {
     } catch (err) {
       alert('Failed to download PDF: ' + (err.response?.data?.error || err.message))
     } finally {
-      setDownloadingVersionId(null)
+      setDownloadingDocId(null)
     }
   }
 
@@ -188,11 +211,15 @@ export const DocumentsList = () => {
     return badges[status] || badges.draft
   }
 
-  const getRecipientProgressText = (version) => {
-    if (!version) return null
+  // ✅ UPDATED: version → doc parameter
+  const getRecipientProgressText = (doc) => {
+    if (!doc) return null
     
-    const recipientStatus = version.recipient_status
-    if (!recipientStatus) return null
+    // ✅ FIXED: Handle null/undefined recipient_status
+    const recipientStatus = doc.recipient_status
+    if (!recipientStatus || Object.keys(recipientStatus).length === 0) {
+      return null
+    }
 
     const statuses = Object.values(recipientStatus)
     const totalRecipients = statuses.length
@@ -229,7 +256,8 @@ export const DocumentsList = () => {
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Documents</h1>
-          <p className="text-lg text-gray-600">All document versions for signing and tracking</p>
+          {/* ✅ UPDATED: Text updated */}
+          <p className="text-lg text-gray-600">Create, manage, and track document signatures</p>
         </div>
         <Button
           onClick={() => setShowCreateModal(true)}
@@ -391,7 +419,7 @@ export const DocumentsList = () => {
       </Modal>
 
       {/* Documents Grid */}
-      {documentVersions.length === 0 ? (
+      {documents.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-2xl shadow-lg">
           <div className="text-7xl mb-6">📄</div>
           <h2 className="text-3xl font-bold text-gray-900 mb-3">No documents yet</h2>
@@ -409,15 +437,15 @@ export const DocumentsList = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {documentVersions.map((version) => {
-            const statusBadge = getStatusBadge(version.status)
-            const progressText = getRecipientProgressText(version)
-            const allRecipients = version.recipients || []
-            const isLocked = version.status !== 'draft'
+          {documents.map((doc) => {
+            const statusBadge = getStatusBadge(doc.status)
+            const progressText = getRecipientProgressText(doc)
+            const allRecipients = doc.recipients || []
+            const isLocked = doc.status !== 'draft'
 
             return (
               <div
-                key={`${version.document_id}-${version.id}`}
+                key={doc.id}
                 className="bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 overflow-hidden group border border-gray-100 hover:border-indigo-300"
               >
                 {/* Card Preview Area */}
@@ -436,20 +464,19 @@ export const DocumentsList = () => {
                     <div className="flex items-start justify-between gap-3 mb-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-xl font-bold text-gray-900 line-clamp-2 group-hover:text-indigo-600 transition-colors">
-                          {version.document_title}
+                          {/* ✅ UPDATED: doc.title instead of version.document_title */}
+                          {doc.title}
                         </h3>
-                        <p className="text-xs text-gray-500 mt-1 font-semibold">
-                          Version {version.version_number}
-                        </p>
                       </div>
                       <span className={`${statusBadge.bg} ${statusBadge.text} text-xs font-bold px-3 py-1.5 rounded-full whitespace-nowrap flex items-center gap-1.5 shadow-lg ring-2 ${statusBadge.ring}`}>
                         <span>{statusBadge.icon}</span>
                         {statusBadge.label}
                       </span>
                     </div>
-                    {version.document_description && (
+                    {/* ✅ UPDATED: doc.description */}
+                    {doc.description && (
                       <p className="text-sm text-gray-600 line-clamp-2">
-                        {version.document_description}
+                        {doc.description}
                       </p>
                     )}
                   </div>
@@ -469,10 +496,11 @@ export const DocumentsList = () => {
                         </div>
                         <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden shadow-inner">
                           {(() => {
-                            const statuses = Object.values(version.recipient_status || {})
+                            const statuses = Object.values(doc.recipient_status || {})
                             const completed = statuses.filter(s => s.completed).length
                             const total = statuses.length || 1
                             const percentage = (completed / total) * 100
+                            console.log(`Progress: ${completed}/${total} = ${percentage}%`)  // ✅ DEBUG
                             return (
                               <div
                                 className="bg-gradient-to-r from-green-400 via-green-500 to-green-600 h-full rounded-full transition-all duration-500 shadow-sm"
@@ -493,7 +521,7 @@ export const DocumentsList = () => {
                         <div className="flex flex-wrap gap-2">
                           {Array.from(new Set(allRecipients)).map((recipient, idx) => (
                             <span
-                              key={`${version.id}-recipient-${idx}-${recipient}`}
+                              key={`${doc.id}-recipient-${idx}-${recipient}`}
                               className={`${getRecipientBadgeClasses(recipient, allRecipients)} text-xs shadow-sm`}
                             >
                               {recipient}
@@ -507,11 +535,11 @@ export const DocumentsList = () => {
                     <div className="flex justify-between items-center text-xs text-gray-500 pt-2 border-t border-gray-200">
                       <span className="flex items-center gap-1">
                         <span>📅</span>
-                        {formatDate(version.created_at)}
+                        {formatDate(doc.created_at)}
                       </span>
                       <span className="text-gray-700 font-bold flex items-center gap-1">
                         <span>📄</span>
-                        {version.page_count} pages
+                        {doc.page_count} pages
                       </span>
                     </div>
                   </div>
@@ -519,7 +547,7 @@ export const DocumentsList = () => {
                   {/* Action Buttons */}
                   <div className="space-y-2 pt-3 border-t border-gray-200">
                     <Button
-                      onClick={() => navigate(`/documents/${version.document_id}`)}
+                      onClick={() => navigate(`/documents/${doc.id}`)}
                       variant="primary"
                       className="w-full"
                     >
@@ -528,33 +556,39 @@ export const DocumentsList = () => {
                     
                     {isLocked && (
                       <Button
-                        onClick={() => handleCopyVersion(version.document_id, version.id)}
+                        // ✅ UPDATED: handleDuplicateDocument with doc.id, doc.title
+                        onClick={() => handleDuplicateDocument(doc.id, doc.title)}
                         variant="secondary"
                         className="w-full"
-                        disabled={copyingVersionId === version.id}
+                        // ✅ UPDATED: duplicatingDocId
+                        disabled={duplicatingDocId === doc.id}
                       >
-                        {copyingVersionId === version.id ? (
+                        {/* ✅ UPDATED: duplicatingDocId */}
+                        {duplicatingDocId === doc.id ? (
                           <>
                             <span className="animate-spin">⟳</span>
-                            Copying...
+                            Duplicating...
                           </>
                         ) : (
                           <>
                             <span>📋</span>
-                            Create New Version
+                            Duplicate Document
                           </>
                         )}
                       </Button>
                     )}
 
-                    {isLocked && version.status === 'completed' && (
+                    {isLocked && doc.status === 'completed' && (
                       <Button
-                        onClick={() => handleDownloadVersion(version.document_title, version.id, version.document_id)}
+                        // ✅ UPDATED: handleDownloadDocument with doc.title, doc.id
+                        onClick={() => handleDownloadDocument(doc.title, doc.id)}
                         variant="success"
                         className="w-full"
-                        disabled={downloadingVersionId === version.id}
+                        // ✅ UPDATED: downloadingDocId
+                        disabled={downloadingDocId === doc.id}
                       >
-                        {downloadingVersionId === version.id ? (
+                        {/* ✅ UPDATED: downloadingDocId */}
+                        {downloadingDocId === doc.id ? (
                           <>
                             <span className="animate-spin">⟳</span>
                             Downloading...

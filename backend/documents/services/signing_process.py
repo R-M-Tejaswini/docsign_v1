@@ -1,16 +1,7 @@
 """
 Signing process service layer.
 
-Responsibilities:
-- Process and validate signature submissions from recipients
-- Manage the complete signing workflow (validation → field updates → event creation → webhooks)
-- Provide a single point for signature processing that can be tested, reused, and extended
-
-Why:
-- Extracts complex business logic from views into a testable, reusable service
-- Enables reuse from multiple contexts (views, admin actions, async tasks)
-- Maintains transaction boundaries and webhook triggering
-- Makes the view layer thin and focused on HTTP concerns only
+✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
 """
 
 from django.db import transaction
@@ -20,7 +11,7 @@ from .document_service import DocumentService
 from .signature_service import SignatureService
 from .token_service import SigningTokenService
 from .webhook_service import WebhookService
-from ..models import DocumentField, SignatureEvent, SigningToken, DocumentVersion
+from ..models import DocumentField, SignatureEvent, SigningToken, Document
 
 
 class SigningProcessService:
@@ -28,18 +19,7 @@ class SigningProcessService:
     
     @staticmethod
     def validate_token(signing_token):
-        """
-        Validate a signing token.
-        
-        Args:
-            signing_token: SigningToken instance
-            
-        Returns:
-            tuple: (bool, error_message_or_None)
-            
-        Raises:
-            ValidationError if token is invalid
-        """
+        """Validate a signing token."""
         token_service = SigningTokenService()
         is_valid, error_message = token_service.is_token_valid(signing_token)
         
@@ -53,16 +33,7 @@ class SigningProcessService:
     
     @staticmethod
     def validate_payload(signer_name, field_values):
-        """
-        Validate signature payload.
-        
-        Args:
-            signer_name: str, name of the signer
-            field_values: list of dicts with field_id and value
-            
-        Raises:
-            ValidationError if validation fails
-        """
+        """Validate signature payload."""
         if not signer_name or not signer_name.strip():
             raise ValidationError({'signer_name': 'Signer name is required'})
         
@@ -76,25 +47,16 @@ class SigningProcessService:
                 })
     
     @staticmethod
-    def validate_fields_ownership(version, recipient, field_values):
+    def validate_fields_ownership(document, recipient, field_values):
         """
         Validate that all fields being signed belong to the recipient.
         
-        Args:
-            version: DocumentVersion instance
-            recipient: str, recipient identifier
-            field_values: list of dicts with field_id and value
-            
-        Returns:
-            QuerySet of validated fields
-            
-        Raises:
-            ValidationError if validation fails
+        ✅ CONSOLIDATED: Now works with Document directly
         """
         field_ids = [fv['field_id'] for fv in field_values]
         
         # Get fields that belong to this recipient and are not yet signed
-        recipient_fields = version.fields.filter(
+        recipient_fields = document.fields.filter(
             id__in=field_ids,
             recipient=recipient,
             locked=False
@@ -108,22 +70,16 @@ class SigningProcessService:
         return recipient_fields
     
     @staticmethod
-    def validate_required_fields(version, recipient, field_values):
+    def validate_required_fields(document, recipient, field_values):
         """
         Validate that all required fields for the recipient are being filled.
         
-        Args:
-            version: DocumentVersion instance
-            recipient: str, recipient identifier
-            field_values: list of dicts with field_id and value
-            
-        Raises:
-            ValidationError if required fields are missing
+        ✅ CONSOLIDATED: Now works with Document directly
         """
         field_ids = set(fv['field_id'] for fv in field_values)
         
         # Get all required fields for this recipient that aren't signed yet
-        required_recipient_fields = version.fields.filter(
+        required_recipient_fields = document.fields.filter(
             recipient=recipient,
             required=True,
             locked=False
@@ -147,42 +103,25 @@ class SigningProcessService:
         user_agent
     ):
         """
-        Process a complete signature submission (all validation + persistence + webhooks).
+        Process a complete signature submission.
         
-        ✅ CONSOLIDATED: This is the single entry point for signature processing.
-        
-        Args:
-            signing_token: SigningToken instance
-            signer_name: str, name of the signer
-            field_values: list of dicts with {field_id, value}
-            ip_address: str, client IP address
-            user_agent: str, client user agent
-            
-        Returns:
-            dict: {
-                'signature_event': SignatureEvent instance,
-                'version': DocumentVersion instance (refreshed),
-                'response_data': dict for API response
-            }
-            
-        Raises:
-            ValidationError: If any validation fails
+        ✅ CONSOLIDATED: Now works with Document directly
         """
-        # Phase 1: Validate everything upfront (before any mutations)
+        # Phase 1: Validate everything upfront
         SigningProcessService.validate_token(signing_token)
         SigningProcessService.validate_payload(signer_name, field_values)
         
-        version = signing_token.version
+        document = signing_token.document
         recipient = signing_token.recipient
         
         # Validate field ownership
         recipient_fields = SigningProcessService.validate_fields_ownership(
-            version, recipient, field_values
+            document, recipient, field_values
         )
         
         # Validate required fields are filled
         SigningProcessService.validate_required_fields(
-            version, recipient, field_values
+            document, recipient, field_values
         )
         
         # Phase 2: Process signature with transaction
@@ -202,16 +141,16 @@ class SigningProcessService:
                     field.locked = True
                     fields_to_update.append(field)
             
-            # Bulk update fields (efficient, avoids N+1)
+            # Bulk update fields
             if fields_to_update:
                 DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
             
             # Compute document hash at signing time
-            document_sha256 = doc_service.compute_sha256(version)
+            document_sha256 = doc_service.compute_sha256(document)
             
             # Create signature event
             signature_event = SignatureEvent.objects.create(
-                version=version,
+                document=document,  # ✅ CONSOLIDATED: Use document directly
                 token=signing_token,
                 recipient=recipient,
                 signer_name=signer_name,
@@ -232,49 +171,39 @@ class SigningProcessService:
             # Convert token to view-only
             token_service.convert_to_view_only(signing_token)
             
-            # Update version status based on completion
-            doc_service.update_version_status(version)
+            # Update document status based on completion
+            doc_service.update_document_status(document)
             
-            # Refresh version to get updated status
-            version.refresh_from_db()
+            # Refresh document to get updated status
+            document.refresh_from_db()
             
-            # Phase 3: Trigger webhooks (outside transaction conceptually, but within for atomicity)
-            SigningProcessService._trigger_webhooks(version, signature_event, signer_name, recipient)
+            # Phase 3: Trigger webhooks
+            SigningProcessService._trigger_webhooks(document, signature_event, signer_name, recipient)
             
             # Prepare response
             response_data = {
                 'signature_id': signature_event.id,
                 'message': 'Document signed successfully',
-                'version_status': version.status,
+                'document_status': document.status,
                 'recipient': recipient,
                 'link_converted_to_view': True
             }
             
             return {
                 'signature_event': signature_event,
-                'version': version,
+                'document': document,
                 'response_data': response_data
             }
     
     @staticmethod
-    def _trigger_webhooks(version, signature_event, signer_name, recipient):
-        """
-        Trigger webhooks for signature and completion events.
-        
-        Args:
-            version: DocumentVersion instance
-            signature_event: SignatureEvent instance
-            signer_name: str
-            recipient: str
-        """
+    def _trigger_webhooks(document, signature_event, signer_name, recipient):
+        """Trigger webhooks for signature and completion events."""
         # Trigger signature created event
         WebhookService.trigger_event(
             event_type='document.signature_created',
             payload={
-                'document_id': version.document.id,
-                'document_title': version.document.title,
-                'version_id': version.id,
-                'version_number': version.version_number,
+                'document_id': document.id,
+                'document_title': document.title,
                 'signature_id': signature_event.id,
                 'signer_name': signer_name,
                 'recipient': recipient,
@@ -285,17 +214,15 @@ class SigningProcessService:
         )
         
         # Trigger completion event if document is now complete
-        if version.status == 'completed':
+        if document.status == 'completed':
             WebhookService.trigger_event(
                 event_type='document.completed',
                 payload={
-                    'document_id': version.document.id,
-                    'document_title': version.document.title,
-                    'version_id': version.id,
-                    'version_number': version.version_number,
-                    'status': version.status,
+                    'document_id': document.id,
+                    'document_title': document.title,
+                    'status': document.status,
                     'completed_at': timezone.now().isoformat(),
-                    'signatures_count': version.signatures.count(),
+                    'signatures_count': document.signatures.count(),
                     'all_signatures': [
                         {
                             'id': sig.id,
@@ -303,17 +230,15 @@ class SigningProcessService:
                             'recipient': sig.recipient,
                             'signed_at': sig.signed_at.isoformat(),
                         }
-                        for sig in version.signatures.all()
+                        for sig in document.signatures.all()
                     ],
-                    'download_url': f'{version.document.get_download_url(version)}',
-                    'audit_export_url': f'{version.document.get_audit_url(version)}',
+                    'download_url': f'{document.get_download_url()}',
+                    'audit_export_url': f'{document.get_audit_url()}',
                 }
             )
 
 
-# Singleton instance
 _signing_process_service = None
-
 
 def get_signing_process_service() -> SigningProcessService:
     """Get singleton instance of signing process service."""

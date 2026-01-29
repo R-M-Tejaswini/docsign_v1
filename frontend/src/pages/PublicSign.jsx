@@ -23,8 +23,8 @@ export const PublicSign = () => {
   const { execute: submitSignature } = useApi((signData) =>
     publicAPI.submitSignature(token, signData)
   )
-  const { execute: downloadVersion } = useApi(() =>
-    publicAPI.downloadPublicVersion(token)
+  const { execute: downloadDocument } = useApi(() =>
+    publicAPI.downloadPublicDocument(token)
   )
 
   const addToast = (message, type = 'info') => {
@@ -188,20 +188,52 @@ export const PublicSign = () => {
   const handleDownloadPdf = async () => {
     try {
       setDownloadingPdf(true)
-      const blob = await downloadVersion()
+      console.log('Starting PDF download...')
+      console.log('Token:', token)
+      
+      const response = await fetch(
+        `http://localhost:8000/api/documents/public/download/${token}/`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': '',
+          }
+        }
+      )
+      
+      console.log('Response status:', response.status)
+      console.log('Response headers:', response.headers)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        console.error('Download error:', errorData)
+        addToast(`Download failed: ${errorData.error || 'Unknown error'}`, 'error')
+        return
+      }
+      
+      const blob = await response.blob()
+      console.log('Blob size:', blob.size)
+      console.log('Blob type:', blob.type)
+      
+      if (blob.size === 0) {
+        addToast('Downloaded file is empty', 'error')
+        return
+      }
       
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${pageData.version?.document?.title}_signed.pdf`
+      link.download = `${pageData.document?.title}_signed.pdf`
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
       
       addToast('PDF downloaded successfully', 'success')
+      console.log('Download complete!')
     } catch (err) {
-      addToast('Failed to download PDF', 'error')
+      console.error('Download error:', err)
+      addToast(`Failed to download PDF: ${err.message}`, 'error')
     } finally {
       setDownloadingPdf(false)
     }
@@ -258,12 +290,13 @@ export const PublicSign = () => {
     )
   }
 
-  const fileUrl = pageData.version?.file_url || pageData.version?.file
+  const fileUrl = pageData.document?.file_url || pageData.document?.file  // ✅ FIXED: Access from document object
   let absoluteFileUrl = fileUrl
   if (fileUrl && !fileUrl.startsWith('http')) {
     absoluteFileUrl = `http://localhost:8000${fileUrl}`
   }
 
+  // Check if fileUrl is valid before proceeding
   if (!absoluteFileUrl) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-red-50 to-red-100">
@@ -294,7 +327,7 @@ export const PublicSign = () => {
         {/* Header - NO NAVBAR */}
         <div className="bg-white border-b-2 border-gray-200 px-6 py-4 shadow-md">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            {pageData.version?.document?.title || 'Document Signing'}
+            {pageData.document?.title || 'Document Signing'}
           </h1>
           <div className="flex items-center gap-4 flex-wrap text-sm">
             <span className={`px-4 py-1.5 rounded-full font-bold shadow-sm ${
@@ -650,7 +683,7 @@ export const PublicSign = () => {
           )}
 
           {/* Download Button */}
-          {pageData.version?.status === 'completed' && (
+          {pageData.document?.status === 'completed' && (
             <Button
               onClick={handleDownloadPdf}
               variant="success"
