@@ -14,14 +14,15 @@ import { FieldOverlay } from '../components/fields/FieldOverlay'
 import { FieldEditor } from '../components/fields/FieldEditor'
 import { LinksPanel } from '../components/links/LinksPanel'
 import { Button } from '../components/ui/Button'
-import { Toast } from '../components/ui/Toast'
 import { useApi } from '../hooks/useApi'
 import { documentAPI } from '../services/api'
 import { AuditTrailPanel } from '../components/audit/AuditTrailPanel'
+import { useToast } from '../contexts/ToastContext'
 
 export const DocumentEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { addToast } = useToast()
   const [documentData, setDocumentData] = useState(null)
   const [documentTitle, setDocumentTitle] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -29,7 +30,6 @@ export const DocumentEdit = () => {
   const [selectedFieldId, setSelectedFieldId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
-  const [toasts, setToasts] = useState([])
   const [activeTab, setActiveTab] = useState('fields')
   const [allRecipients, setAllRecipients] = useState(['Recipient 1'])
   const [downloadingDocument, setDownloadingDocument] = useState(false)
@@ -52,14 +52,6 @@ export const DocumentEdit = () => {
   const { execute: downloadDoc } = useApi(() =>
     documentAPI.download(id)
   )
-
-  const addToast = (message, type = 'info') => {
-    const toastId = Date.now()
-    setToasts([...toasts, { id: toastId, message, type, duration: 3000 }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== toastId))
-    }, 3000)
-  }
 
   useEffect(() => {
     loadDocument()
@@ -534,17 +526,6 @@ export const DocumentEdit = () => {
           </div>
         </div>
       </div>
-
-      {/* Toast Notifications */}
-      {toasts.map((toast) => (
-        <Toast
-          key={toast.id}
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onClose={() => setToasts(toasts.filter((t) => t.id !== toast.id))}
-        />
-      ))}
     </div>
   )
 }

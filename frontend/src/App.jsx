@@ -6,6 +6,7 @@ import { TemplatesList } from './pages/TemplatesList'
 import { TemplateEdit } from './pages/TemplateEdit'
 import { PublicSign } from './pages/PublicSign'
 import { WebhooksPage } from './pages/WebhooksPage'
+import { ToastProvider } from './contexts/ToastContext'
 
 function Navigation() {
   const location = useLocation()
@@ -67,18 +68,20 @@ function Navigation() {
 function App() {
   return (
     <Router>
-      <div className="min-h-screen bg-gray-50">
-        <Navigation />
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/documents" element={<DocumentsList />} />
-          <Route path="/documents/:id" element={<DocumentEdit />} />
-          <Route path="/templates" element={<TemplatesList />} />
-          <Route path="/templates/:id" element={<TemplateEdit />} />
-          <Route path="/sign/:token" element={<PublicSign />} />
-          <Route path="/webhooks" element={<WebhooksPage />} />
-        </Routes>
-      </div>
+      <ToastProvider>
+        <div className="min-h-screen bg-gray-50">
+          <Navigation />
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/documents" element={<DocumentsList />} />
+            <Route path="/documents/:id" element={<DocumentEdit />} />
+            <Route path="/templates" element={<TemplatesList />} />
+            <Route path="/templates/:id" element={<TemplateEdit />} />
+            <Route path="/sign/:token" element={<PublicSign />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
+          </Routes>
+        </div>
+      </ToastProvider>
     </Router>
   )
 }

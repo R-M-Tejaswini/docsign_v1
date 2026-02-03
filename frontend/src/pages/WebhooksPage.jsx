@@ -3,13 +3,13 @@ import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { useApi } from '../hooks/useApi'
 import { documentAPI } from '../services/api'
-import { Toast } from '../components/ui/Toast'
+import { useToast } from '../contexts/ToastContext'
 
 export const WebhooksPage = () => {
+  const { addToast } = useToast()
   const [webhooks, setWebhooks] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [toasts, setToasts] = useState([])
   
   const [formData, setFormData] = useState({
     url: '',
@@ -48,14 +48,6 @@ export const WebhooksPage = () => {
     } finally {
       setLoading(false)
     }
-  }
-
-  const addToast = (message, type = 'info') => {
-    const id = Date.now()
-    setToasts([...toasts, { id, message, type, duration: 3000 }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 3000)
   }
 
   const handleCreateWebhook = async () => {
@@ -352,17 +344,6 @@ export const WebhooksPage = () => {
           </div>
         </div>
       </Modal>
-
-      {/* Toast Notifications */}
-      {toasts.map((toast) => (
-        <Toast
-          key={toast.id}
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onClose={() => setToasts(toasts.filter((t) => t.id !== toast.id))}
-        />
-      ))}
     </div>
   )
 }

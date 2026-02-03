@@ -36,15 +36,18 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
         fields = ['value', 'recipient', 'label', 'required', 'x_pct', 'y_pct', 'width_pct', 'height_pct']
     
     def validate(self, data):
-        """Ensure the field is editable given version and lock state."""
+        """Ensure the field is editable given document status and lock state."""
         field = self.instance
-        version = field.version
+        document = field.document
         
-        if version.status != 'draft':
+        # ✅ FIXED: Check document.status (not version which doesn't exist)
+        if document.status != 'draft':
+            # Locked documents: only allow editing field values, not properties
             if 'recipient' in data or 'label' in data or 'required' in data:
                 raise serializers.ValidationError(
                     'Cannot edit field properties in locked documents'
                 )
+            # If field is locked (signed), can't edit value either
             if field.locked:
                 raise serializers.ValidationError(
                     'This field has been signed and cannot be edited'
@@ -57,7 +60,7 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
 
 
 class SignatureEventSerializer(serializers.ModelSerializer):
-    """Serializer for SignatureEvent."""
+    """Serializer for SignatureEvent - includes all audit fields for admin use."""
     signer_name_display = serializers.CharField(source='signer_name', read_only=True)
     is_verified = serializers.SerializerMethodField()
     # ✅ ADDED: Explicitly define ip_address field
@@ -68,6 +71,32 @@ class SignatureEventSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'recipient', 'signer_name_display', 'signed_at',
             'ip_address', 'user_agent', 'document_sha256', 'event_hash',
+            'field_values', 'is_verified'
+        ]
+        read_only_fields = fields
+    
+    def get_is_verified(self, obj):
+        """Check if the signature is valid (not tampered)."""
+        from .services import get_signature_service
+        service = get_signature_service()
+        return service.is_signature_valid(obj)
+
+
+class PublicSignatureEventSerializer(serializers.ModelSerializer):
+    """
+    Serializer for SignatureEvent in public endpoints - excludes sensitive audit fields.
+    
+    Security: This serializer is used ONLY for public token-based endpoints.
+    Excludes: ip_address, user_agent, document_sha256, event_hash
+    These fields are audit-trail data and must not be exposed publicly.
+    """
+    signer_name_display = serializers.CharField(source='signer_name', read_only=True)
+    is_verified = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = SignatureEvent
+        fields = [
+            'id', 'recipient', 'signer_name_display', 'signed_at',
             'field_values', 'is_verified'
         ]
         read_only_fields = fields
@@ -128,6 +157,27 @@ class DocumentSerializer(serializers.ModelSerializer):
         return service.get_recipient_status(obj)
 
 
+class PublicDocumentSerializer(serializers.ModelSerializer):
+    """Lean serializer for public sign endpoints - excludes sensitive audit data."""
+    file_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Document
+        fields = [
+            'id', 'title', 'status', 'page_count',
+            'file_url'
+        ]
+        read_only_fields = fields
+    
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+
+
 class DocumentListSerializer(serializers.ModelSerializer):
     """Serializer for document list views."""
     file_url = serializers.SerializerMethodField()
@@ -153,8 +203,10 @@ class DocumentListSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
-        """Get all unique recipients from fields."""
-        return list(obj.fields.values_list('recipient', flat=True).distinct())
+        """Get all unique recipients from fields - using DocumentService for consistency."""
+        from .services import get_document_service
+        service = get_document_service()
+        return service.get_recipients(obj)
     
     def get_recipient_status(self, obj):
         """Get signing status per recipient."""

@@ -2,12 +2,15 @@
 Unified hashing service for all hash computations.
 
 ✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
+✅ REFACTORED: Uses singleton decorator pattern
 """
 
 import hashlib
 import json
+from common.services import singleton
 
 
+@singleton
 class HashingService:
     """Service for all file and data hashing operations."""
     
@@ -54,14 +57,9 @@ class HashingService:
         return HashingService.compute_json_sha256(hash_input)
 
 
-_hashing_service = None
-
 def get_hashing_service() -> HashingService:
     """Get singleton instance of hashing service."""
-    global _hashing_service
-    if _hashing_service is None:
-        _hashing_service = HashingService()
-    return _hashing_service
+    return HashingService.get_instance()
 
 
 def compute_file_sha256(file_obj):

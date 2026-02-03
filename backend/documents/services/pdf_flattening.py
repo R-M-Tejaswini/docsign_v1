@@ -11,6 +11,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.colors import HexColor
+from common.services import singleton
 
 
 class PDFFontManager:
@@ -251,6 +252,7 @@ class PDFOverlayRenderer:
         canvas_obj.drawString(x + 2, text_y, text)
 
 
+@singleton
 class PDFFlatteningService:
     """Service for generating flattened PDFs with all overlays merged."""
     
@@ -335,7 +337,7 @@ class PDFFlatteningService:
             
             # Compute and store SHA256 of signed PDF
             from .document_service import DocumentService
-            service = DocumentService()
+            service = DocumentService.get_instance()
             service.update_signed_pdf_hash(document)
             
             return document
@@ -344,13 +346,6 @@ class PDFFlatteningService:
             raise
 
 
-# Singleton instance
-_flattening_service = None
-
-
 def get_pdf_flattening_service() -> PDFFlatteningService:
     """Get singleton instance of PDF flattening service."""
-    global _flattening_service
-    if _flattening_service is None:
-        _flattening_service = PDFFlatteningService()
-    return _flattening_service
+    return PDFFlatteningService.get_instance()

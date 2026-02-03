@@ -2,21 +2,21 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { DocumentViewer } from '../components/pdf/DocumentViewer'
 import { Button } from '../components/ui/Button'
-import { Toast } from '../components/ui/Toast'
 import { useApi } from '../hooks/useApi'
 import { publicAPI } from '../services/api'
 import { fieldPctToPx } from '../utils/coords'
 import { getRecipientColor, getRecipientBadgeClasses } from '../utils/recipientColors'
+import { useToast } from '../contexts/ToastContext'
 
 export const PublicSign = () => {
   const { token } = useParams()
   const navigate = useNavigate()
+  const { addToast } = useToast()
   const [pageData, setPageData] = useState(null)
   const [signerName, setSignerName] = useState('')
   const [fieldValues, setFieldValues] = useState({})
   const [currentPage, setCurrentPage] = useState(1)
   const [submitting, setSubmitting] = useState(false)
-  const [toasts, setToasts] = useState([])
   const [downloadingPdf, setDownloadingPdf] = useState(false)
 
   const { execute: getSignPage } = useApi(() => publicAPI.getSignPage(token))
@@ -26,14 +26,6 @@ export const PublicSign = () => {
   const { execute: downloadDocument } = useApi(() =>
     publicAPI.downloadPublicDocument(token)
   )
-
-  const addToast = (message, type = 'info') => {
-    const id = Date.now()
-    setToasts([...toasts, { id, message, type, duration: 3000 }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 3000)
-  }
 
   useEffect(() => {
     loadSignPage()
@@ -724,17 +716,6 @@ export const PublicSign = () => {
           </div>
         </div>
       </div>
-
-      {/* Toast Notifications */}
-      {toasts.map((toast) => (
-        <Toast
-          key={toast.id}
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onClose={() => setToasts(toasts.filter((t) => t.id !== toast.id))}
-        />
-      ))}
     </div>
   )
 }

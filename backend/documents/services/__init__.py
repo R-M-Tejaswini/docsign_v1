@@ -5,7 +5,7 @@ from .document_service import DocumentService, get_document_service
 from .signature_service import SignatureService, get_signature_service
 from .token_service import SigningTokenService, get_token_service
 from .signing_process import SigningProcessService, get_signing_process_service
-from .webhook_service import WebhookService
+from .webhook_service import WebhookService, get_webhook_service
 
 __all__ = [
     'compute_file_sha256',
@@ -24,4 +24,5 @@ __all__ = [
     'SigningProcessService',
     'get_signing_process_service',
     'WebhookService',
+    'get_webhook_service',
 ]

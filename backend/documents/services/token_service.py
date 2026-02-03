@@ -2,13 +2,16 @@
 Signing token business logic service layer.
 
 ✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
+✅ REFACTORED: Uses singleton decorator pattern
 """
 
 import secrets
 from django.core.exceptions import ValidationError
+from common.services import singleton
 from .token_utils import calculate_expiry, is_token_expired
 
 
+@singleton
 class SigningTokenService:
     """Service for signing token logic."""
     
@@ -81,11 +84,6 @@ class SigningTokenService:
             token.save(update_fields=['scope', 'used'])
 
 
-_token_service = None
-
 def get_token_service() -> SigningTokenService:
     """Get singleton instance of token service."""
-    global _token_service
-    if _token_service is None:
-        _token_service = SigningTokenService()
-    return _token_service
+    return SigningTokenService.get_instance()

@@ -25,9 +25,14 @@ from PyPDF2 import PdfReader
 from django.db import models
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+
+# ----------------------------
+# Internal imports
+# ----------------------------
+from common.models import BaseSignableField
 
 
 # ----------------------------
@@ -177,55 +182,44 @@ class Document(models.Model):
         return f'{settings.BASE_URL}/api/documents/{self.id}/audit_export/'
 
 
-class DocumentField(models.Model):
+class DocumentField(BaseSignableField):
     """
     DocumentField is a field instance on a document.
     
-    ✅ CONSOLIDATED: Now points directly to Document (not DocumentVersion)
+    What:
+    - Stores field data for a specific document signing instance
+    - Inherits shared structure from BaseSignableField (type, label, recipient, position)
+    - Adds document-specific properties (value, locked, created_at)
+    
+    Why:
+    - ✅ CONSOLIDATED: Now points directly to Document (not DocumentVersion)
+    - Fields created from TemplateField instances maintain same structure
+    - value tracks user input, locked prevents modification after signing
     """
-    FIELD_TYPES = [
-        ('text', 'Text'),
-        ('signature', 'Signature'),
-        ('date', 'Date'),
-        ('checkbox', 'Checkbox'),
-    ]
     
     document = models.ForeignKey(
         Document,
         on_delete=models.CASCADE,
         related_name='fields'
     )
-    field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
-    label = models.CharField(max_length=255)
-    recipient = models.CharField(
-        max_length=100,
-        default='Recipient 1',
-        help_text="Recipient identifier who must fill this field"
-    )
     
-    page_number = models.PositiveIntegerField(validators=[MinValueValidator(1)])
-    x_pct = models.FloatField(validators=[MinValueValidator(0.0), MaxValueValidator(1.0)])
-    y_pct = models.FloatField(validators=[MinValueValidator(0.0), MaxValueValidator(1.0)])
-    width_pct = models.FloatField(validators=[MinValueValidator(0.0), MaxValueValidator(1.0)])
-    height_pct = models.FloatField(validators=[MinValueValidator(0.0), MaxValueValidator(1.0)])
-    
-    required = models.BooleanField(default=True)
+    # Document-specific fields (not in base model)
     value = models.TextField(blank=True, null=True)
     locked = models.BooleanField(
         default=False,
         help_text="Field is locked after signing and cannot be edited"
     )
-    
     created_at = models.DateTimeField(auto_now_add=True)
     
-    class Meta:
-        ordering = ['page_number', 'y_pct', 'x_pct']
+    # Note: All shared field properties (field_type, label, recipient, position, etc.)
+    # are inherited from BaseSignableField
     
     def __str__(self):
         return f"{self.label} ({self.recipient})"
     
     def clean(self):
         """Validate recipient is assigned."""
+        super().clean()  # Call base validation
         if not self.recipient or not self.recipient.strip():
             raise ValidationError({'recipient': 'Each field must be assigned to a recipient'})
 
@@ -353,6 +347,7 @@ class Webhook(models.Model):
         ('document.completed', 'Document Completed'),
         ('document.locked', 'Document Locked'),
         ('document.status_changed', 'Status Changed'),
+        ('document.test', 'Test Event'),  # ✅ ADDED: Support for test endpoint
     ]
 
     url = models.URLField(

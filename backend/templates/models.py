@@ -21,8 +21,13 @@ import os
 # Django imports
 # ----------------------------
 from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MinValueValidator
 from django.core.exceptions import ValidationError
+
+# ----------------------------
+# Common imports
+# ----------------------------
+from common.models import BaseSignableField
 
 
 # ----------------------------
@@ -172,65 +177,29 @@ class Template(models.Model):
         pass
 
 
-class TemplateField(models.Model):
+class TemplateField(BaseSignableField):
     """
     TemplateField defines a field location on a template PDF.
 
     What:
     - Stores positional and semantic information for a field
       (type, label, recipient, position).
+    - Inherits shared field structure from BaseSignableField
 
     Why:
     - Template fields are copied into document versions to form
       the signing structure without redefinition each time.
+    - Uses base model to maintain consistency with DocumentField
     """
-    FIELD_TYPES = [
-        ('text', 'Text'),
-        ('signature', 'Signature'),
-        ('date', 'Date'),
-        ('checkbox', 'Checkbox'),
-    ]
     
     template = models.ForeignKey(
         Template,
         on_delete=models.CASCADE,
         related_name='fields'
     )
-    field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
-    label = models.CharField(max_length=255)
-    recipient = models.CharField(
-        max_length=100,
-        default='Recipient 1',
-        help_text="Recipient identifier (e.g., 'Recipient 1', 'Recipient 2')"
-    )
     
-    # Page number (1-indexed)
-    page_number = models.PositiveIntegerField(
-        validators=[MinValueValidator(1)]
-    )
-    
-    # Position and size as percentages (0.0 to 1.0)
-    x_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="X position as percentage of page width"
-    )
-    y_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Y position as percentage of page height"
-    )
-    width_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Width as percentage of page width"
-    )
-    height_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Height as percentage of page height"
-    )
-    
-    required = models.BooleanField(default=True)
-    
-    class Meta:
-        ordering = ['page_number', 'y_pct', 'x_pct']
+    # Note: All field properties (field_type, label, recipient, position, etc.)
+    # are inherited from BaseSignableField
     
     def __str__(self):
         return f"{self.label} ({self.recipient}) - Page {self.page_number}"

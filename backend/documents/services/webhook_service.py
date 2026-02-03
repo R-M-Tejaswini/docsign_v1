@@ -1,15 +1,19 @@
 import json
 import requests
 import logging
+import hmac
+import hashlib
 from datetime import timedelta
 from django.utils import timezone
 from django.db import transaction
 from celery import shared_task
+from common.services import singleton
 from ..models import Webhook, WebhookEvent, WebhookDeliveryLog
 
 logger = logging.getLogger(__name__)
 
 
+@singleton
 class WebhookService:
     """Service for managing webhook events and deliveries."""
     
@@ -141,7 +145,7 @@ class WebhookService:
                 args=[event.id, retry_attempt + 1],
                 countdown=retry_delay
             )
-            
+
             logger.info(f"⏳ Retrying webhook {webhook.id} in {retry_delay}s")
         else:
             # All retries exhausted
@@ -203,7 +207,8 @@ def deliver_webhook_event(event_id: int):
     """Celery task to deliver webhook event."""
     try:
         event = WebhookEvent.objects.get(id=event_id)
-        WebhookService.deliver_event(event, retry_attempt=0)
+        service = WebhookService.get_instance()
+        service.deliver_event(event, retry_attempt=0)
     except WebhookEvent.DoesNotExist:
         logger.error(f"WebhookEvent {event_id} not found")
 
@@ -213,6 +218,12 @@ def retry_webhook_event(event_id: int, retry_attempt: int):
     """Celery task to retry failed webhook delivery."""
     try:
         event = WebhookEvent.objects.get(id=event_id)
-        WebhookService.deliver_event(event, retry_attempt=retry_attempt)
+        service = WebhookService.get_instance()
+        service.deliver_event(event, retry_attempt=retry_attempt)
     except WebhookEvent.DoesNotExist:
         logger.error(f"WebhookEvent {event_id} not found")
+
+
+def get_webhook_service() -> WebhookService:
+    """Get singleton instance of webhook service."""
+    return WebhookService.get_instance()

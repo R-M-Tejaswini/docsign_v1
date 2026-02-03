@@ -2,12 +2,14 @@
 Signature event business logic service layer.
 
 ✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
+✅ REFACTORED: Uses singleton decorator pattern
 """
 
-from django.utils import timezone
+from common.services import singleton
 from .hashing import HashingService
 
 
+@singleton
 class SignatureService:
     """Service for signature event logic."""
     
@@ -73,11 +75,6 @@ class SignatureService:
         }
 
 
-_signature_service = None
-
 def get_signature_service() -> SignatureService:
     """Get singleton instance of signature service."""
-    global _signature_service
-    if _signature_service is None:
-        _signature_service = SignatureService()
-    return _signature_service
+    return SignatureService.get_instance()

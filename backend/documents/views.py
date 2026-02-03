@@ -52,7 +52,8 @@ from .serializers import (
     DocumentCreateSerializer,
     DocumentFieldSerializer, DocumentFieldUpdateSerializer,
     SigningTokenSerializer, DocumentSerializer,
-    SignatureEventSerializer, PublicSignPayloadSerializer,
+    SignatureEventSerializer, PublicSignatureEventSerializer, PublicDocumentSerializer,
+    PublicSignPayloadSerializer,
     PublicSignResponseSerializer, WebhookSerializer, WebhookEventSerializer, WebhookDeliveryLogSerializer
 )
 
@@ -60,10 +61,10 @@ from .services import (
     get_document_service, 
     get_signature_service,
     get_token_service,
-    get_signing_process_service,  # ✅ NEW: Add this import
-    get_pdf_flattening_service
+    get_signing_process_service,
+    get_pdf_flattening_service,
+    get_webhook_service
 )
-from .services.webhook_service import WebhookService
 
 # ----------------------------
 # Pagination classes
@@ -469,15 +470,17 @@ class PublicSignViewSet(viewsets.ViewSet):
             
             signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
                         document.signatures.all()
-            signatures_data = SignatureEventSerializer(signatures, many=True).data
+            # ✅ SECURITY FIX: Use PublicSignatureEventSerializer to exclude sensitive audit data
+            signatures_data = PublicSignatureEventSerializer(signatures, many=True, context={'request': request}).data
             
+            # ✅ FIX: Return fields/signatures at top level only (no duplication in document object)
             return Response({
                 'token': token,
                 'scope': signing_token.scope,
                 'recipient': signing_token.recipient,
                 'is_editable': is_editable,
                 'editable_field_ids': editable_field_ids,
-                'document': DocumentSerializer(document).data,  # ✅ CONSOLIDATED
+                'document': PublicDocumentSerializer(document, context={'request': request}).data,
                 'fields': fields_data,
                 'signatures': signatures_data,
                 'expires_at': signing_token.expires_at,
@@ -837,9 +840,9 @@ class WebhookViewSet(viewsets.ModelViewSet):
                     status='pending'
                 )
         
-        from .services.webhook_service import WebhookService
+        webhook_service = get_webhook_service()
         # Optimization: Ideally this should use .delay() with Celery for async processing
-        WebhookService.deliver_event(event)
+        webhook_service.deliver_event(event)
         
         return Response({
             'status': 'Test webhook sent',
@@ -874,8 +877,8 @@ class WebhookViewSet(viewsets.ModelViewSet):
             event.attempt_count = 0
             event.save()
             
-            from .services.webhook_service import WebhookService
-            WebhookService.deliver_event(event)
+            webhook_service = get_webhook_service()
+            webhook_service.deliver_event(event)
             
             return Response({
                 'status': 'Webhook retry initiated',
@@ -916,9 +919,6 @@ class WebhookEventViewSet(viewsets.ReadOnlyModelViewSet):
         - Critical for troubleshooting delivery issues and debugging external integrations.
         """
         event = self.get_object()
-        logs = event.delivery_logs.all().order_by('-created_at')
-        
-        page = self.paginate_queryset(logs)
         logs = event.delivery_logs.all().order_by('-created_at')
         
         page = self.paginate_queryset(logs)

@@ -2,11 +2,13 @@
 Signing process service layer.
 
 ✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
+✅ REFACTORED: Uses singleton decorator pattern
 """
 
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from common.services import singleton
 from .document_service import DocumentService
 from .signature_service import SignatureService
 from .token_service import SigningTokenService
@@ -14,6 +16,7 @@ from .webhook_service import WebhookService
 from ..models import DocumentField, SignatureEvent, SigningToken, Document
 
 
+@singleton
 class SigningProcessService:
     """Service for processing signature submissions."""
     
@@ -198,8 +201,10 @@ class SigningProcessService:
     @staticmethod
     def _trigger_webhooks(document, signature_event, signer_name, recipient):
         """Trigger webhooks for signature and completion events."""
+        webhook_service = WebhookService.get_instance()
+        
         # Trigger signature created event
-        WebhookService.trigger_event(
+        webhook_service.trigger_event(
             event_type='document.signature_created',
             payload={
                 'document_id': document.id,
@@ -215,7 +220,7 @@ class SigningProcessService:
         
         # Trigger completion event if document is now complete
         if document.status == 'completed':
-            WebhookService.trigger_event(
+            webhook_service.trigger_event(
                 event_type='document.completed',
                 payload={
                     'document_id': document.id,
@@ -238,11 +243,6 @@ class SigningProcessService:
             )
 
 
-_signing_process_service = None
-
 def get_signing_process_service() -> SigningProcessService:
     """Get singleton instance of signing process service."""
-    global _signing_process_service
-    if _signing_process_service is None:
-        _signing_process_service = SigningProcessService()
-    return _signing_process_service
+    return SigningProcessService.get_instance()

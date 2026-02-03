@@ -2,14 +2,16 @@
 Document business logic service layer.
 
 ✅ CONSOLIDATED: Updated to work directly with Document (no DocumentVersion)
+✅ REFACTORED: Uses singleton decorator pattern
 """
 
 from django.db import models as django_models
 from django.utils import timezone
-from django.core.exceptions import ValidationError
+from common.services import singleton
 from .hashing import HashingService
 
 
+@singleton
 class DocumentService:
     """Service for document business logic."""
     
@@ -166,11 +168,6 @@ class DocumentService:
                 print(f"⚠️  Failed to auto-generate signed PDF: {e}")
 
 
-_document_service = None
-
 def get_document_service() -> DocumentService:
     """Get singleton instance of document service."""
-    global _document_service
-    if _document_service is None:
-        _document_service = DocumentService()
-    return _document_service
+    return DocumentService.get_instance()

@@ -6,13 +6,14 @@ import { FieldPalette } from '../components/fields/FieldPalette'
 import { FieldOverlay } from '../components/fields/FieldOverlay'
 import { FieldEditor } from '../components/fields/FieldEditor'
 import { Button } from '../components/ui/Button'
-import { Toast } from '../components/ui/Toast'
 import { useApi } from '../hooks/useApi'
 import { templateAPI } from '../services/api'
+import { useToast } from '../contexts/ToastContext'
 
 export const TemplateEdit = () => {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { addToast } = useToast()
   const [template, setTemplate] = useState(null)
   const [templateTitle, setTemplateTitle] = useState('')
   const [isEditingTitle, setIsEditingTitle] = useState(false)
@@ -20,7 +21,6 @@ export const TemplateEdit = () => {
   const [selectedFieldId, setSelectedFieldId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [addingFieldType, setAddingFieldType] = useState(null)
-  const [toasts, setToasts] = useState([])
   const [allRecipients, setAllRecipients] = useState(['Recipient 1'])
 
   const { execute: getTemplate } = useApi(() => templateAPI.get(id))
@@ -28,14 +28,6 @@ export const TemplateEdit = () => {
   const { execute: updateField } = useApi((fid, data) => templateAPI.updateField(id, fid, data))
   const { execute: deleteField } = useApi((fid) => templateAPI.deleteField(id, fid))
   const { execute: updateTemplate } = useApi((data) => templateAPI.update(id, data))
-
-  const addToast = (message, type = 'info') => {
-    const toastId = Date.now()
-    setToasts([...toasts, { id: toastId, message, type, duration: 3000 }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== toastId))
-    }, 3000)
-  }
 
   useEffect(() => {
     loadTemplate()
@@ -326,17 +318,6 @@ export const TemplateEdit = () => {
           </div>
         </div>
       </div>
-
-      {/* Toast Notifications */}
-      {toasts.map((toast) => (
-        <Toast
-          key={toast.id}
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onClose={() => setToasts(toasts.filter((t) => t.id !== toast.id))}
-        />
-      ))}
     </div>
   )
 }
