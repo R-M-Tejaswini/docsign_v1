@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "corsheaders",
 
     # Local apps
+    "common",
     "templates",
     "documents",
 ]

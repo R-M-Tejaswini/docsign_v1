@@ -75,17 +75,14 @@ class TemplateFieldSerializer(serializers.ModelSerializer):
 class TemplateSerializer(serializers.ModelSerializer):
     """
     Full serializer for Template.
-
-    What:
-    - Returns template metadata along with all nested fields and recipients.
-
-    Why:
-    - Used when viewing or editing a template in detail, where the client
-      needs the complete structure to render previews and editors.
+    
+    ✅ UPDATED: Uses model property powered by RecipientService
     """
     fields = TemplateFieldSerializer(many=True, read_only=True)
     file_url = serializers.SerializerMethodField()
-    recipients = serializers.SerializerMethodField()
+    
+    # ✅ FIXED: Removed source='recipients' (redundant)
+    recipients = serializers.ReadOnlyField()
     
     class Meta:
         model = Template
@@ -104,31 +101,10 @@ class TemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'page_count', 'created_at', 'updated_at']
     
     def get_file_url(self, obj):
-        """
-        Generate file URL for the template PDF.
-
-        What:
-        - Returns the relative media URL for the uploaded template file.
-
-        Why:
-        - Keeps the API response lightweight and frontend-agnostic,
-          allowing the client to decide how to resolve or proxy media URLs.
-        """
+        """Generate file URL for the template PDF."""
         if obj.file:
-            # Returns something like: /media/templates/3/file.pdf
             return obj.file.url
         return None
-    
-    def get_recipients(self, obj):
-        """
-        Get list of unique recipients defined in the template.
-
-        Why:
-        - Templates often need to display or validate involved recipients
-          before being used to generate documents.
-        """
-        recipients = obj.get_recipients()
-        return sorted(list(set(recipients)))  # Ensure deduplication
 
 
 class TemplateListSerializer(serializers.ModelSerializer):

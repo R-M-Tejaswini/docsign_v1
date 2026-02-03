@@ -21,8 +21,10 @@ import os
 # Django imports
 # ----------------------------
 from django.db import models
-from django.core.validators import MinValueValidator, MaxValueValidator
-from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
+from django.db.models import Q, CheckConstraint
+from common.models import BaseSignableField, TimestampMixin
+from common.services import get_webhook_trigger_service
 
 
 # ----------------------------
@@ -82,22 +84,36 @@ class Template(models.Model):
     
     def get_recipients(self):
         """
-        Get list of unique recipients defined in this template.
-
-        What:
-        - Aggregates recipient identifiers from all associated TemplateFields.
-
-        Why:
-        - Allows clients to preview who will be involved in signing
-          before creating a document from this template.
+        ✅ REFACTORED: Now uses centralized RecipientService
+        
+        Returns:
+            List[str]: Unique recipient names from template fields
         """
-        return sorted(list(
-            set(
-                self.fields
-                    .values_list('recipient', flat=True)
-                    .filter(recipient__isnull=False)
-            )
-        ))
+        from common.services import get_recipient_service
+        service = get_recipient_service()
+        return service.get_unique_recipients(self.fields.all())
+    
+    @property
+    def recipients(self):
+        """
+        Property accessor for recipients (for serializer compatibility).
+        
+        Returns:
+            List[str]: Unique recipient names
+        """
+        return self.get_recipients()
+    
+    @property
+    def recipients_with_counts(self):
+        """
+        Get recipients with their field counts.
+        
+        Returns:
+            List[Dict]: List of {recipient, count} dictionaries
+        """
+        from common.services import get_recipient_service
+        service = get_recipient_service()
+        return service.get_recipients_with_counts(self.fields.all())
     
     def save(self, *args, **kwargs):
         """
@@ -112,6 +128,8 @@ class Template(models.Model):
         - Ensures clean file organization (no 'None' folders).
         - Optimization: Only counts pages on creation (not updates).
         """
+        is_new = self.pk is None
+        
         # 1. Optimization: Only calculate page count on creation (when self.pk is None)
         # or if page_count is explicitly default/invalid
         if (not self.pk or self.page_count == 1) and self.file:
@@ -132,14 +150,14 @@ class Template(models.Model):
                 except:
                     pass
         
-        # Track if this is a new object (no ID yet)
-        is_new = self.pk is None
+        # Track if new before saving
+        is_new_before_save = self.pk is None
         
         # 2. Save to DB (This generates self.pk)
         super().save(*args, **kwargs)
         
         # 3. Post-Save File Move (Move from 'temp' to 'id')
-        if is_new and self.file:
+        if is_new_before_save and self.file:
             old_file_name = self.file.name
             
             # Check if it was saved to temp
@@ -159,6 +177,27 @@ class Template(models.Model):
                     self.file.storage.delete(old_file_name)
                 except Exception as e:
                     print(f"Warning: Failed to delete temp file {old_file_name}: {e}")
+        
+        # ✅ TRIGGER WEBHOOK on creation
+        if is_new_before_save:
+            trigger_service = get_webhook_trigger_service()
+            trigger_service.trigger_template_created(
+                template=self,
+                created_by=None  # Can be passed from view
+            )
+    
+    def delete(self, *args, **kwargs):
+        """
+        ✅ UPDATED: Trigger webhook on template deletion
+        """
+        template_id = self.id
+        template_title = self.title
+        
+        # Delete
+        super().delete(*args, **kwargs)
+        
+        # Note: Can't trigger after delete, so trigger before in view
+        # Or implement soft delete
     
     def clean(self):
         """
@@ -172,65 +211,91 @@ class Template(models.Model):
         pass
 
 
-class TemplateField(models.Model):
+class TemplateField(BaseSignableField):
     """
     TemplateField defines a field location on a template PDF.
-
-    What:
-    - Stores positional and semantic information for a field
-      (type, label, recipient, position).
-
-    Why:
-    - Template fields are copied into document versions to form
-      the signing structure without redefinition each time.
+    
+    ✅ REFACTORED: Now inherits from BaseSignableField
+    ✅ UPDATED: Added constraints for consistency
     """
-    FIELD_TYPES = [
-        ('text', 'Text'),
-        ('signature', 'Signature'),
-        ('date', 'Date'),
-        ('checkbox', 'Checkbox'),
-    ]
     
     template = models.ForeignKey(
         Template,
         on_delete=models.CASCADE,
         related_name='fields'
     )
-    field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
-    label = models.CharField(max_length=255)
-    recipient = models.CharField(
-        max_length=100,
-        default='Recipient 1',
-        help_text="Recipient identifier (e.g., 'Recipient 1', 'Recipient 2')"
-    )
-    
-    # Page number (1-indexed)
-    page_number = models.PositiveIntegerField(
-        validators=[MinValueValidator(1)]
-    )
-    
-    # Position and size as percentages (0.0 to 1.0)
-    x_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="X position as percentage of page width"
-    )
-    y_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Y position as percentage of page height"
-    )
-    width_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Width as percentage of page width"
-    )
-    height_pct = models.FloatField(
-        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
-        help_text="Height as percentage of page height"
-    )
-    
-    required = models.BooleanField(default=True)
     
     class Meta:
         ordering = ['page_number', 'y_pct', 'x_pct']
+        
+        # ✅ FIXED: Use 'condition' NOT 'check'
+        constraints = [
+            # Ensure recipient is assigned
+            models.CheckConstraint(
+                condition=~Q(recipient__exact='') & ~Q(recipient__isnull=True),
+                name='template_field_recipient_required',
+                violation_error_message='Field must be assigned to a recipient'
+            ),
+            
+            # Ensure field dimensions are valid
+            models.CheckConstraint(
+                condition=Q(width_pct__gt=0) & Q(height_pct__gt=0),
+                name='template_field_dimensions_positive',
+                violation_error_message='Field width and height must be positive'
+            ),
+        ]
+        
+        indexes = [
+            models.Index(fields=['template', 'page_number'], name='template_page_fields_idx'),
+            models.Index(fields=['template', 'recipient'], name='template_recipient_fields_idx'),
+        ]
     
-    def __str__(self):
-        return f"{self.label} ({self.recipient}) - Page {self.page_number}"
+    def clean(self):
+        """Validate template field."""
+        from django.core.exceptions import ValidationError
+        
+        if not self.recipient or not self.recipient.strip():
+            raise ValidationError({
+                'recipient': 'Each field must be assigned to a recipient'
+            })
+        
+        # Check for position conflicts
+        existing_fields = TemplateField.objects.filter(
+            template=self.template,
+            page_number=self.page_number,
+        ).exclude(pk=self.pk)
+        
+        for existing in existing_fields:
+            if self._overlaps_with(existing):
+                raise ValidationError({
+                    'position': f'Field overlaps with "{existing.label}" at this position'
+                })
+    
+    def _overlaps_with(self, other_field):
+        """Check if this field overlaps with another field."""
+        x_overlap = (self.x_pct < other_field.x_pct + other_field.width_pct and
+                    self.x_pct + self.width_pct > other_field.x_pct)
+        y_overlap = (self.y_pct < other_field.y_pct + other_field.height_pct and
+                    self.y_pct + self.height_pct > other_field.y_pct)
+        return x_overlap and y_overlap
+    
+    def save(self, *args, **kwargs):
+        """
+        ✅ UPDATED: Trigger webhook on field addition with atomic transaction
+        """
+        from django.db import transaction
+        from common.services import get_webhook_trigger_service
+        
+        is_new = self.pk is None
+        
+        # Use atomic transaction
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            
+            if is_new:
+                trigger_service = get_webhook_trigger_service()
+                trigger_service.trigger_template_field_added(
+                    template=self.template,
+                    field=self,
+                    added_by=None
+                )

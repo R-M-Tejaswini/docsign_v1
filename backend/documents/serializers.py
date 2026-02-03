@@ -79,53 +79,78 @@ class SignatureEventSerializer(serializers.ModelSerializer):
         return service.is_signature_valid(obj)
 
 
-class DocumentSerializer(serializers.ModelSerializer):
-    """Unified Document serializer replacing DocumentVersion serializers."""
-    file_url = serializers.SerializerMethodField()
-    signed_file_url = serializers.SerializerMethodField()
-    recipients = serializers.SerializerMethodField()
-    recipient_status = serializers.SerializerMethodField()
+class DocumentDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed document serializer with all nested data.
+    
+    ✅ UPDATED: Uses model properties powered by RecipientService
+    """
     fields = DocumentFieldSerializer(many=True, read_only=True)
     signatures = SignatureEventSerializer(many=True, read_only=True)
+    file_url = serializers.SerializerMethodField()
+    
+    # ✅ FIXED: Removed source parameter (redundant)
+    recipients = serializers.ReadOnlyField()
+    recipient_status = serializers.ReadOnlyField()
     
     class Meta:
         model = Document
         fields = [
-            'id', 'title', 'description', 'status', 'page_count', 'created_at', 'updated_at',
-            'file', 'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
-            'signatures', 'signed_pdf_sha256'
+            'id',
+            'title',
+            'description',
+            'file',
+            'file_url',
+            'signed_file',
+            'status',
+            'page_count',
+            'created_at',
+            'updated_at',
+            'fields',
+            'signatures',
+            'recipients',
+            'recipient_status',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'signed_pdf_sha256', 'file_url', 'signed_file_url']
+        read_only_fields = [
+            'id', 'page_count', 'signed_file', 
+            'created_at', 'updated_at'
+        ]
     
     def get_file_url(self, obj):
         if obj.file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.file.url)
             return obj.file.url
         return None
+
+
+class DocumentSerializer(serializers.ModelSerializer):
+    """
+    Unified Document serializer.
     
-    def get_signed_file_url(self, obj):
-        if obj.signed_file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.signed_file.url)
-            return obj.signed_file.url
+    ✅ UPDATED: Uses model properties powered by RecipientService
+    """
+    file_url = serializers.SerializerMethodField()
+    # ✅ FIXED: Removed source parameter (redundant)
+    recipients = serializers.ReadOnlyField()
+    recipient_status = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = Document
+        fields = [
+            'id', 'title', 'description',
+            'file', 'file_url', 'signed_file',
+            'status', 'page_count',
+            'created_at', 'updated_at',
+            'recipients', 'recipient_status'
+        ]
+        read_only_fields = [
+            'id', 'page_count', 'signed_file', 
+            'created_at', 'updated_at'
+        ]
+    
+    def get_file_url(self, obj):
+        if obj.file:
+            return obj.file.url
         return None
-    
-    def get_recipients(self, obj):
-        if hasattr(obj, '_recipients_cache'):
-            return obj._recipients_cache
-        from .services import get_document_service
-        service = get_document_service()
-        return service.get_recipients(obj)
-    
-    def get_recipient_status(self, obj):
-        if hasattr(obj, '_recipient_status_cache'):
-            return obj._recipient_status_cache
-        from .services import get_document_service
-        service = get_document_service()
-        return service.get_recipient_status(obj)
 
 
 class DocumentListSerializer(serializers.ModelSerializer):
@@ -158,55 +183,6 @@ class DocumentListSerializer(serializers.ModelSerializer):
     
     def get_recipient_status(self, obj):
         """Get signing status per recipient."""
-        from .services import get_document_service
-        service = get_document_service()
-        return service.get_recipient_status(obj)
-
-
-class DocumentDetailSerializer(serializers.ModelSerializer):
-    """Detailed view for single document."""
-    file_url = serializers.SerializerMethodField()
-    signed_file_url = serializers.SerializerMethodField()
-    recipients = serializers.SerializerMethodField()
-    recipient_status = serializers.SerializerMethodField()
-    fields = DocumentFieldSerializer(many=True, read_only=True)
-    signatures = SignatureEventSerializer(many=True, read_only=True)
-    
-    class Meta:
-        model = Document
-        fields = [
-            'id', 'title', 'description', 'status', 'page_count', 'created_at', 'updated_at',
-            'file_url', 'signed_file_url', 'fields', 'recipients', 'recipient_status',
-            'signatures', 'signed_pdf_sha256'
-        ]
-        read_only_fields = fields
-    
-    def get_file_url(self, obj):
-        if obj.file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
-        return None
-    
-    def get_signed_file_url(self, obj):
-        if obj.signed_file:
-            request = self.context.get('request')
-            if request:
-                return request.build_absolute_uri(obj.signed_file.url)
-            return obj.signed_file.url
-        return None
-    
-    def get_recipients(self, obj):
-        if hasattr(obj, '_recipients_cache'):
-            return obj._recipients_cache
-        from .services import get_document_service
-        service = get_document_service()
-        return service.get_recipients(obj)
-    
-    def get_recipient_status(self, obj):
-        if hasattr(obj, '_recipient_status_cache'):
-            return obj._recipient_status_cache
         from .services import get_document_service
         service = get_document_service()
         return service.get_recipient_status(obj)
@@ -335,10 +311,11 @@ class PublicSignPayloadSerializer(serializers.Serializer):
 
 class PublicSignResponseSerializer(serializers.Serializer):
     """Serializer for the response after successful signing."""
-    signature_id = serializers.IntegerField()
+    success = serializers.BooleanField()  # ✅ ADD THIS
     message = serializers.CharField()
-    document_status = serializers.CharField()  # ✅ FIXED: Changed from 'version_status'
-    recipient = serializers.CharField()
+    signature_id = serializers.IntegerField()
+    document_status = serializers.CharField()
+    recipient = serializers.CharField()  # ✅ ALREADY HERE
     link_converted_to_view = serializers.BooleanField()
 
 

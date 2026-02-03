@@ -10,12 +10,16 @@ from django.utils import timezone
 from .document_service import DocumentService
 from .signature_service import SignatureService
 from .token_service import SigningTokenService
-from .webhook_service import WebhookService
 from ..models import DocumentField, SignatureEvent, SigningToken, Document
+from common.services import get_webhook_trigger_service
 
 
 class SigningProcessService:
     """Service for processing signature submissions."""
+    
+    # ========================================
+    # VALIDATION METHODS
+    # ========================================
     
     @staticmethod
     def validate_token(signing_token):
@@ -94,7 +98,12 @@ class SigningProcessService:
                 'missing_fields': list(missing_required.values('id', 'label'))
             })
     
+    # ========================================
+    # MAIN SIGNING PROCESS (ATOMIC)
+    # ========================================
+    
     @staticmethod
+    @transaction.atomic
     def process_signature_submission(
         signing_token,
         signer_name,
@@ -103,142 +112,134 @@ class SigningProcessService:
         user_agent
     ):
         """
-        Process a complete signature submission.
+        ✅ UNIFIED: Process a signature submission with all validations.
         
-        ✅ CONSOLIDATED: Now works with Document directly
+        This is the ONLY entry point for signature processing.
+        Uses atomic transaction to ensure all-or-nothing execution.
+        
+        Args:
+            signing_token: SigningToken instance
+            signer_name: Name of person signing
+            field_values: List of {field_id, value} dicts
+            ip_address: Client IP address
+            user_agent: Client user agent string
+            
+        Returns:
+            Dict with signature_event and document
+            
+        Raises:
+            ValidationError: If any validation fails
         """
-        # Phase 1: Validate everything upfront
+        # ========== PHASE 1: VALIDATE TOKEN & PAYLOAD ==========
         SigningProcessService.validate_token(signing_token)
         SigningProcessService.validate_payload(signer_name, field_values)
         
-        document = signing_token.document
-        recipient = signing_token.recipient
+        # ========== PHASE 2: LOCK RESOURCES & CHECK STATUS ==========
+        # Lock the token to prevent double-use
+        try:
+            token = SigningToken.objects.select_for_update().get(
+                pk=signing_token.pk
+            )
+        except SigningToken.DoesNotExist:
+            raise ValidationError("Token not found")
         
-        # Validate field ownership
-        recipient_fields = SigningProcessService.validate_fields_ownership(
+        # Validate token state
+        if token.used or token.revoked:
+            raise ValidationError("This signing link has already been used or revoked")
+        
+        # Check expiration
+        if token.expires_at and timezone.now() > token.expires_at:
+            raise ValidationError("This signing link has expired")
+        
+        # Lock the document to prevent concurrent status updates
+        document = Document.objects.select_for_update().get(
+            pk=token.document_id
+        )
+        recipient = token.recipient
+        
+        # ========== PHASE 3: VALIDATE FIELDS ==========
+        SigningProcessService.validate_fields_ownership(
             document, recipient, field_values
         )
-        
-        # Validate required fields are filled
         SigningProcessService.validate_required_fields(
             document, recipient, field_values
         )
         
-        # Phase 2: Process signature with transaction
-        with transaction.atomic():
-            doc_service = DocumentService()
-            sig_service = SignatureService()
-            token_service = SigningTokenService()
-            
-            # Update fields with values and lock them
-            fields_to_update = []
-            fields_map = {f.id: f for f in recipient_fields}
-            
-            for fv in field_values:
-                field = fields_map.get(int(fv['field_id']))
-                if field:
-                    field.value = fv['value']
-                    field.locked = True
-                    fields_to_update.append(field)
-            
-            # Bulk update fields
-            if fields_to_update:
-                DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
-            
-            # Compute document hash at signing time
-            document_sha256 = doc_service.compute_sha256(document)
-            
-            # Create signature event
-            signature_event = SignatureEvent.objects.create(
-                document=document,  # ✅ CONSOLIDATED: Use document directly
-                token=signing_token,
-                recipient=recipient,
-                signer_name=signer_name,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                document_sha256=document_sha256,
-                field_values=[
-                    {'field_id': fv['field_id'], 'value': fv['value']}
-                    for fv in field_values
-                ],
-                metadata={
-                    'recipient': recipient,
-                    'fields_signed': len(field_values)
-                }
-            )
-            # Note: event_hash is computed via post_save signal in models.py
-            
-            # Convert token to view-only
-            token_service.convert_to_view_only(signing_token)
-            
-            # Update document status based on completion
-            doc_service.update_document_status(document)
-            
-            # Refresh document to get updated status
-            document.refresh_from_db()
-            
-            # Phase 3: Trigger webhooks
-            SigningProcessService._trigger_webhooks(document, signature_event, signer_name, recipient)
-            
-            # Prepare response
-            response_data = {
-                'signature_id': signature_event.id,
-                'message': 'Document signed successfully',
-                'document_status': document.status,
+        # ========== PHASE 4: CREATE SIGNATURE EVENT ==========
+        document_sha256 = DocumentService.compute_sha256(document)
+        signature_service = SignatureService()
+        
+        signature_event = SignatureEvent.objects.create(
+            document=document,
+            token=token,
+            recipient=recipient,
+            signer_name=signer_name,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            document_sha256=document_sha256,
+            field_values=[
+                {'field_id': fv['field_id'], 'value': fv['value']}
+                for fv in field_values
+            ],
+            metadata={
                 'recipient': recipient,
-                'link_converted_to_view': True
-            }
-            
-            return {
-                'signature_event': signature_event,
-                'document': document,
-                'response_data': response_data
-            }
-    
-    @staticmethod
-    def _trigger_webhooks(document, signature_event, signer_name, recipient):
-        """Trigger webhooks for signature and completion events."""
-        # Trigger signature created event
-        WebhookService.trigger_event(
-            event_type='document.signature_created',
-            payload={
-                'document_id': document.id,
-                'document_title': document.title,
-                'signature_id': signature_event.id,
-                'signer_name': signer_name,
-                'recipient': recipient,
-                'signed_at': signature_event.signed_at.isoformat(),
-                'field_values': signature_event.field_values,
-                'ip_address': signature_event.ip_address,
+                'fields_signed': len(field_values)
             }
         )
         
-        # Trigger completion event if document is now complete
-        if document.status == 'completed':
-            WebhookService.trigger_event(
-                event_type='document.completed',
-                payload={
-                    'document_id': document.id,
-                    'document_title': document.title,
-                    'status': document.status,
-                    'completed_at': timezone.now().isoformat(),
-                    'signatures_count': document.signatures.count(),
-                    'all_signatures': [
-                        {
-                            'id': sig.id,
-                            'signer_name': sig.signer_name,
-                            'recipient': sig.recipient,
-                            'signed_at': sig.signed_at.isoformat(),
-                        }
-                        for sig in document.signatures.all()
-                    ],
-                    'download_url': f'{document.get_download_url()}',
-                    'audit_export_url': f'{document.get_audit_url()}',
-                }
+        # ========== PHASE 5: UPDATE FIELD VALUES & LOCK ==========
+        for fv in field_values:
+            DocumentField.objects.filter(pk=fv['field_id']).update(
+                value=fv['value'],
+                locked=True
+                # ✅ REMOVED: updated_at (not on DocumentField? Check if TimestampMixin includes it)
             )
+        
+        # ========== PHASE 6: MARK TOKEN AS USED ==========
+        SigningToken.objects.filter(pk=token.pk).update(
+            used=True
+            # ✅ REMOVED: updated_at=timezone.now() (SigningToken has no updated_at field)
+        )
+        
+        # ========== PHASE 7: UPDATE DOCUMENT STATUS ==========
+        doc_service = DocumentService()
+        doc_service.update_document_status(document)
+        
+        # ========== PHASE 8: TRIGGER WEBHOOKS ==========
+        document.refresh_from_db()
+        trigger_service = get_webhook_trigger_service()
+        trigger_service.trigger_signature_created(
+            document=document,
+            signature_event=signature_event,
+            signer_name=signer_name,
+            recipient=recipient,
+            field_values=[
+                {'field_id': fv['field_id'], 'value': fv['value']}
+                for fv in field_values
+            ]
+        )
+        
+        # ========== PHASE 9: RETURN RESULT ==========
+        return {
+            'signature_event': signature_event,
+            'document': document,
+            'response_data': {
+                'success': True,
+                'message': 'Signature submitted successfully',
+                'signature_id': signature_event.id,
+                'document_status': document.status,
+                'recipient': recipient,  # ✅ ADD THIS
+                'link_converted_to_view': True,  # ✅ ADD THIS
+            }
+        }
 
+
+# ========================================
+# SINGLETON PATTERN
+# ========================================
 
 _signing_process_service = None
+
 
 def get_signing_process_service() -> SigningProcessService:
     """Get singleton instance of signing process service."""

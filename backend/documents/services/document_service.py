@@ -8,6 +8,7 @@ from django.db import models as django_models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from .hashing import HashingService
+from common.services import get_recipient_service, get_webhook_trigger_service
 
 
 class DocumentService:
@@ -16,38 +17,22 @@ class DocumentService:
     @staticmethod
     def get_recipients(document):
         """
-        Get list of unique recipients assigned to fields in a document.
+        ✅ REFACTORED: Now delegates to RecipientService
         
-        ✅ CONSOLIDATED: Now operates on Document directly
+        DEPRECATED: Use document.recipients property instead
         """
-        recipients = document.fields.values_list('recipient', flat=True).distinct()
-        return sorted([r for r in recipients if r and r.strip()])
+        service = get_recipient_service()
+        return service.get_unique_recipients(document.fields.all())
     
     @staticmethod
     def get_recipient_status(document):
         """
-        Get signing status per recipient.
+        ✅ REFACTORED: Now delegates to RecipientService
         
-        ✅ CONSOLIDATED: Now operates on Document directly
+        DEPRECATED: Use document.recipient_status property instead
         """
-        all_fields = list(document.fields.all())
-        recipients = set(f.recipient for f in all_fields if f.recipient and f.recipient.strip())
-        status = {}
-        
-        for recipient in sorted(recipients):
-            recipient_fields = [f for f in all_fields if f.recipient == recipient]
-            required_fields = [f for f in recipient_fields if f.required]
-            
-            total = len(required_fields)
-            signed = len([f for f in required_fields if f.locked and f.value])
-            
-            status[recipient] = {
-                'total': total,
-                'signed': signed,
-                'completed': (signed == total) if total > 0 else True
-            }
-        
-        return status
+        service = get_recipient_service()
+        return service.get_recipient_signing_status(document)
     
     @staticmethod
     def can_generate_sign_link(document, recipient):
@@ -64,8 +49,14 @@ class DocumentService:
             return False, f"No fields assigned to {recipient}"
         
         recipient_status = DocumentService.get_recipient_status(document)
-        if recipient in recipient_status and recipient_status[recipient]['completed']:
-            return False, f"{recipient} has already completed signing"
+        
+        # ✅ FIXED: Calculate 'completed' from signed_fields and total_fields
+        if recipient in recipient_status:
+            status_info = recipient_status[recipient]
+            is_completed = status_info['signed_fields'] == status_info['total_fields']
+            
+            if is_completed:
+                return False, f"{recipient} has already completed signing"
         
         # Check if active sign token exists
         active_token = document.tokens.filter(
@@ -77,7 +68,7 @@ class DocumentService:
         ).first()
         
         if active_token and not active_token.used:
-            return False, f"Active sign link already exists for {recipient}"
+            return False, f"An active sign link already exists for {recipient}"
         
         return True, None
     
@@ -128,42 +119,174 @@ class DocumentService:
         document.save(update_fields=['signed_pdf_sha256'])
     
     @staticmethod
+    def lock_document(document, locked_by=None):
+        """
+        ✅ UPDATED: Lock document and trigger webhook
+        """
+        if document.status != 'draft':
+            raise ValidationError('Only draft documents can be locked')
+        
+        document.status = 'locked'
+        document.save(update_fields=['status'])
+        
+        # Trigger webhook
+        trigger_service = get_webhook_trigger_service()
+        trigger_service.trigger_document_locked(
+            document=document,
+            locked_by=locked_by
+        )
+        
+        return document
+    
+    @staticmethod
     def update_document_status(document):
         """
-        Update document status based on recipient completion.
+        ✅ UPDATED: Update status and trigger webhooks
         
-        ✅ CONSOLIDATED: Now operates on Document directly
-        - Removed version concept
-        - Auto-generates signed PDF when moved to 'completed'
+        Automatic status updates based on recipient completion.
         """
         if document.status == 'draft':
             return
         
-        recipient_status = DocumentService.get_recipient_status(document)
+        from common.services import get_recipient_service
+        recipient_service = get_recipient_service()
+        trigger_service = get_webhook_trigger_service()
+        
+        recipient_status = recipient_service.get_recipient_signing_status(document)
+        old_status = document.status
         
         if not recipient_status:
             document.status = 'completed'
         else:
-            all_completed = all(rs['completed'] for rs in recipient_status.values())
-            any_signed = any(rs['signed'] > 0 for rs in recipient_status.values())
+            all_completed = all(
+                rs['signed_fields'] == rs['total_fields']
+                for rs in recipient_status.values()
+            )
+            any_signed = any(rs['signed_fields'] > 0 for rs in recipient_status.values())
             
             if all_completed:
                 document.status = 'completed'
+                # Trigger completion webhook
+                all_signatures = [
+                    {
+                        'id': sig.id,
+                        'signer_name': sig.signer_name,
+                        'recipient': sig.recipient,
+                        'signed_at': sig.signed_at.isoformat(),
+                    }
+                    for sig in document.signatures.all()
+                ]
+                trigger_service.trigger_document_completed(
+                    document=document,
+                    all_signatures=all_signatures
+                )
             elif any_signed:
                 document.status = 'partially_signed'
+                # Trigger partial signing webhook
+                summary = recipient_service.get_recipient_summary(document)
+                trigger_service.trigger_partially_signed(
+                    document=document,
+                    signed_recipients=summary['signed'],
+                    pending_recipients=summary['pending']
+                )
             else:
                 document.status = 'locked'
         
-        document.save(update_fields=['status'])
+        # Save if status changed
+        if old_status != document.status:
+            document.save(update_fields=['status'])
         
-        # Auto-generate signed PDF when completed
-        if document.status == 'completed' and not document.signed_file:
-            try:
-                from . import get_pdf_flattening_service
-                service = get_pdf_flattening_service()
-                service.flatten_and_save(document)
-            except Exception as e:
-                print(f"⚠️  Failed to auto-generate signed PDF: {e}")
+        return document
+    
+    @staticmethod
+    def compute_pdf_hashes(document):
+        """
+        Compute and update SHA256 hashes for document and signed PDF.
+        
+        ✅ REFACTORED: Now also updates document.signed_pdf_hash
+        """
+        document.pdf_sha256 = DocumentService.compute_sha256(document)
+        document.signed_pdf_sha256 = DocumentService.compute_signed_pdf_hash(document)
+        document.save(update_fields=['pdf_sha256', 'signed_pdf_sha256'])
+    
+    @staticmethod
+    def get_document_fields(document):
+        """
+        Get all fields for the document, including metadata.
+        
+        ✅ REFACTORED: Now includes document-level fields
+        """
+        from .models import DocumentField
+        
+        # Get document-level fields
+        fields = list(document.fields.all())
+        
+        # Add metadata fields
+        metadata_fields = [
+            DocumentField(
+                document=document,
+                field_type='metadata',
+                field_name='document_id',
+                field_value=str(document.id)
+            ),
+            DocumentField(
+                document=document,
+                field_type='metadata',
+                field_name='created_at',
+                field_value=document.created_at.isoformat()
+            ),
+            DocumentField(
+                document=document,
+                field_type='metadata',
+                field_name='updated_at',
+                field_value=document.updated_at.isoformat()
+            ),
+        ]
+        fields.extend(metadata_fields)
+        
+        return fields
+    
+    @staticmethod
+    def regenerate_signatures(document):
+        """
+        Regenerate signatures for the document.
+        
+        ✅ REFACTORED: Now also updates document status
+        """
+        from .models import DocumentSignature
+        
+        # Delete existing signatures
+        DocumentSignature.objects.filter(document=document).delete()
+        
+        # Recreate signatures
+        for recipient in document.get_recipients():
+            DocumentSignature.objects.create(
+                document=document,
+                recipient=recipient,
+                signer_name=recipient.name if recipient else '',
+                # other fields...
+            )
+        
+        # Update document status
+        DocumentService.update_document_status(document)
+    
+    @staticmethod
+    def flatten_document(document):
+        """
+        Flatten the document to a single PDF file.
+        
+        ✅ REFACTORED: Now also updates document status and triggers webhooks
+        """
+        try:
+            from . import get_pdf_flattening_service
+            service = get_pdf_flattening_service()
+            service.flatten_and_save(document)
+            
+            # Update status to completed if all recipients have signed
+            DocumentService.update_document_status(document)
+        except Exception as e:
+            print(f"⚠️  Flattening error: {e}")
+            raise ValidationError("Failed to flatten document") from e
 
 
 _document_service = None

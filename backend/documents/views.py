@@ -510,8 +510,10 @@ class PublicSignViewSet(viewsets.ViewSet):
         
         try:
             signing_service = get_signing_process_service()
+            
+            # ✅ CALL WITH CORRECT PARAMETER NAMES
             result = signing_service.process_signature_submission(
-                signing_token=signing_token,
+                signing_token=signing_token,  # ✅ Correct name
                 signer_name=signer_name,
                 field_values=field_values,
                 ip_address=self.get_client_ip(request),
@@ -530,15 +532,11 @@ class PublicSignViewSet(viewsets.ViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
         except Exception as e:
-            # ✅ IMPROVED: Log full traceback
             import traceback
             print("=" * 80)
             print("ERROR IN SUBMIT_SIGNATURE:")
             print("=" * 80)
             traceback.print_exc()
-            print("=" * 80)
-            print(f"Exception type: {type(e).__name__}")
-            print(f"Exception message: {str(e)}")
             print("=" * 80)
             
             return Response(
