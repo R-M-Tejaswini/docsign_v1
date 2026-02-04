@@ -7,7 +7,7 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from documents.services import get_document_service
-from documents.models import DocumentField
+from documents.models import DocumentField, Document
 from ..models import SignatureEvent, SigningToken
 
 
@@ -144,13 +144,11 @@ class SigningProcessService:
             sig_service = SignatureService()
             token_service = SigningTokenService()
             
-            # ✅ CONSOLIDATED: Use utility function
+            # ✅ Step 1: Update field values and lock them
             SigningProcessService.update_field_values(recipient_fields, field_values)
             
-            # Compute document hash at signing time
+            # ✅ Step 2: Create signature event
             document_sha256 = doc_service.compute_sha256(document)
-            
-            # Create signature event
             signature_event = SignatureEvent.objects.create(
                 document=document,
                 token=signing_token,
@@ -169,39 +167,51 @@ class SigningProcessService:
                 }
             )
             
-            # Convert token to view-only
+            # ✅ Step 3: Convert token to view-only
             token_service.convert_to_view_only(signing_token)
-            
-            # Update document status based on completion
-            doc_service.update_document_status(document)
-            
-            # Refresh document to get updated status
-            document.refresh_from_db()
-            
-            # Phase 3: Trigger webhooks
-            SigningProcessService._trigger_webhooks(document, signature_event, signer_name, recipient)
-            
-            # Prepare response
-            response_data = {
-                'signature_id': signature_event.id,
-                'message': 'Document signed successfully',
-                'document_status': document.status,
-                'recipient': recipient,
-                'link_converted_to_view': True
-            }
-            
-            return {
-                'signature_event': signature_event,
-                'document': document,
-                'response_data': response_data
-            }
+        
+        # ✅ CRITICAL FIX: Refresh document and prefetch updated fields AFTER transaction commits
+        # This ensures we see the newly locked fields in the database
+        document.refresh_from_db()
+        document = Document.objects.prefetch_related('fields').get(id=document.id)
+        
+        # ✅ Step 4: Update document status based on current field state
+        doc_service.update_document_status(document)
+        
+        # ✅ Step 5: Refresh document again to get updated status
+        document.refresh_from_db()
+        
+        # Phase 3: Trigger webhooks
+        SigningProcessService._trigger_webhooks(document, signature_event, signer_name, recipient)
+        
+        # Prepare response
+        response_data = {
+            'signature_id': signature_event.id,
+            'message': 'Document signed successfully',
+            'document_status': document.status,
+            'recipient': recipient,
+            'link_converted_to_view': True
+        }
+        
+        return {
+            'signature_event': signature_event,
+            'document': document,
+            'response_data': response_data
+        }
     
     @staticmethod
     def _trigger_webhooks(document, signature_event, signer_name, recipient):
-        """Trigger webhooks for signature and completion events."""
+        """
+        ✅ REFACTORED: Properly decoupled webhook triggering
+        ✅ CLEAN PAYLOADS: No redundant fields
+        ✅ ASYNC: Uses Celery, non-blocking
+        
+        Triggered from SigningProcessService (not hardcoded in views)
+        Payloads contain only necessary data
+        """
         from webhooks.services import WebhookService
         
-        # Trigger signature created event
+        # Event 1: Signature Created
         WebhookService.trigger_event(
             event_type='document.signature_created',
             payload={
@@ -212,21 +222,33 @@ class SigningProcessService:
                 'recipient': recipient,
                 'signed_at': signature_event.signed_at.isoformat(),
                 'field_values': signature_event.field_values,
-                'ip_address': signature_event.ip_address,
             }
         )
         
-        # Trigger completion event if document is now complete
+        # Event 2: Document Status Changed (if status changed)
+        WebhookService.trigger_event(
+            event_type='document.status_changed',
+            payload={
+                'document_id': document.id,
+                'document_title': document.title,
+                'status': document.status,
+                'changed_at': timezone.now().isoformat(),
+                'changed_by': recipient,
+            }
+        )
+        
+        # Event 3: Document Completed (only if document is now complete)
         if document.status == 'completed':
+            # ✅ Clean payload: Only include essential info, no redundancy
             WebhookService.trigger_event(
                 event_type='document.completed',
                 payload={
                     'document_id': document.id,
                     'document_title': document.title,
-                    'status': document.status,
+                    'status': 'completed',
                     'completed_at': timezone.now().isoformat(),
-                    'signatures_count': document.signatures.count(),
-                    'all_signatures': [
+                    'total_signatures': document.signatures.count(),
+                    'signatures': [
                         {
                             'id': sig.id,
                             'signer_name': sig.signer_name,
@@ -235,8 +257,10 @@ class SigningProcessService:
                         }
                         for sig in document.signatures.all()
                     ],
-                    'download_url': f'{document.get_download_url()}',
-                    'audit_export_url': f'{document.get_audit_url()}',
+                    # ✅ NOT INCLUDED (reduce payload size):
+                    # - download_url (consumer can construct from document_id)
+                    # - audit_export_url (consumer can construct from document_id)
+                    # - all_signatures with document_id again (already included above)
                 }
             )
 

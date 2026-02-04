@@ -184,7 +184,22 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 
 # ✅ ADD: Celery Configuration (Synchronous for development)
-CELERY_BROKER_URL = 'redis://localhost:6379'  # Or your broker URL
-CELERY_RESULT_BACKEND = 'redis://localhost:6379'
-CELERY_TASK_ALWAYS_EAGER = True  # ← Execute tasks synchronously (development)
-CELERY_TASK_EAGER_PROPAGATES = True
+# ===== CELERY CONFIGURATION =====
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes hard limit
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes soft limit
+CELERY_TASK_MAX_RETRIES = 3
+
+
+# ===== WEBHOOK CONFIGURATION =====
+WEBHOOK_SIGNATURE_VERSION = 'v1'  # For API versioning of signatures
+WEBHOOK_SIGNATURE_ALGORITHM = 'sha256'  # HMAC-SHA256
+WEBHOOK_REQUEST_TIMEOUT = 10  # seconds
+WEBHOOK_MAX_RETRIES = 3
+WEBHOOK_RETRY_DELAYS = [60, 300, 900]  # 1 min, 5 min, 15 min

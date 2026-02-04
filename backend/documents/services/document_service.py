@@ -21,7 +21,10 @@ class DocumentService:
     @staticmethod
     def get_recipient_status(document):
         """Get signing status per recipient."""
-        all_fields = list(document.fields.all())
+        # ✅ CRITICAL: Always query fresh fields, don't use cached object
+        all_fields = list(
+            document.fields.select_related('document').all()
+        )
         recipients = set(f.recipient for f in all_fields if f.recipient and f.recipient.strip())
         status = {}
         
@@ -30,6 +33,7 @@ class DocumentService:
             required_fields = [f for f in recipient_fields if f.required]
             
             total = len(required_fields)
+            # ✅ Only count fields that are BOTH locked AND have a value
             signed = len([f for f in required_fields if f.locked and f.value])
             
             status[recipient] = {
@@ -106,11 +110,14 @@ class DocumentService:
         if document.status == 'draft':
             return
         
+        # ✅ CRITICAL: Always query fresh field data, don't use cached object
         recipient_status = DocumentService.get_recipient_status(document)
         
         if not recipient_status:
+            # No recipients defined, mark as completed
             document.status = 'completed'
         else:
+            # Check if all recipients completed all their required fields
             all_completed = all(rs['completed'] for rs in recipient_status.values())
             any_signed = any(rs['signed'] > 0 for rs in recipient_status.values())
             
@@ -121,6 +128,7 @@ class DocumentService:
             else:
                 document.status = 'locked'
         
+        # ✅ Save with explicit update_fields to avoid race conditions
         document.save(update_fields=['status'])
         
         # Auto-generate signed PDF when completed

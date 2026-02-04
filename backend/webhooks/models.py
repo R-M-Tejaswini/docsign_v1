@@ -2,7 +2,7 @@
 backend/webhooks/models.py
 
 
-Webhook configuration and event delivery tracking.
+Professional webhook implementation with async delivery and audit trail.
 """
 
 import secrets
@@ -11,10 +11,11 @@ from django.db import models
 
 class Webhook(models.Model):
     """Webhook registration for external systems to listen to events."""
+    
+    # Only the 3 events we support
     EVENTS = [
         ('document.signature_created', 'Signature Created'),
         ('document.completed', 'Document Completed'),
-        ('document.locked', 'Document Locked'),
         ('document.status_changed', 'Status Changed'),
     ]
 
@@ -29,17 +30,19 @@ class Webhook(models.Model):
         max_length=255,
         unique=True,
         blank=True,
-        help_text="Secret key for webhook signature verification (HMAC-SHA256)"
+        help_text="Secret key for HMAC-SHA256 signature verification. Keep this private!"
     )
     is_active = models.BooleanField(
         default=True,
         help_text="Whether this webhook is enabled"
     )
     
+    # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     last_triggered_at = models.DateTimeField(null=True, blank=True)
     
+    # Statistics
     total_deliveries = models.PositiveIntegerField(default=0)
     successful_deliveries = models.PositiveIntegerField(default=0)
     failed_deliveries = models.PositiveIntegerField(default=0)
@@ -62,6 +65,7 @@ class Webhook(models.Model):
 
 class WebhookEvent(models.Model):
     """Record of each webhook event fired."""
+    
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('delivered', 'Delivered'),
@@ -73,33 +77,43 @@ class WebhookEvent(models.Model):
         Webhook,
         on_delete=models.CASCADE,
         related_name='webhook_events',
-        db_index=True  # ✅ ADDED: Index for webhook lookups
+        db_index=True
     )
     event_type = models.CharField(
         max_length=50,
         choices=Webhook.EVENTS,
+        db_index=True,
         help_text="Type of event (e.g., 'document.completed')"
     )
     payload = models.JSONField(
-        help_text="Event data sent to webhook"
+        help_text="Event data sent to webhook (immutable)"
     )
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
         default='pending',
-        db_index=True  # ✅ ADDED: Index for status filtering
+        db_index=True
     )
     attempt_count = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True)
     
+    # Timing
     created_at = models.DateTimeField(auto_now_add=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
     next_retry_at = models.DateTimeField(null=True, blank=True)
     
+    # Idempotency: delivery_id prevents duplicate processing on the consumer side
+    delivery_id = models.CharField(
+        max_length=64,
+        unique=True,
+        db_index=True,
+        help_text="Unique ID for this delivery attempt (for idempotency)"
+    )
+    
     class Meta:
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['webhook', 'status', 'created_at']),  # ✅ UPDATED: Composite
+            models.Index(fields=['webhook', 'status', 'created_at']),
             models.Index(fields=['event_type', 'created_at']),
         ]
     
@@ -109,6 +123,7 @@ class WebhookEvent(models.Model):
 
 class WebhookDeliveryLog(models.Model):
     """Detailed log of each delivery attempt."""
+    
     event = models.ForeignKey(
         WebhookEvent,
         on_delete=models.CASCADE,
@@ -118,11 +133,12 @@ class WebhookDeliveryLog(models.Model):
     response_body = models.TextField(blank=True)
     error_message = models.TextField(blank=True)
     
+    # Timing
     created_at = models.DateTimeField(auto_now_add=True)
     duration_ms = models.PositiveIntegerField(
         null=True,
         blank=True,
-        help_text="How long the HTTP request took in milliseconds"
+        help_text="HTTP request duration in milliseconds"
     )
     
     class Meta:
@@ -132,4 +148,4 @@ class WebhookDeliveryLog(models.Model):
         ]
     
     def __str__(self):
-        return f"Delivery Log - {self.event} (HTTP {self.status_code})"
+        return f"Attempt {self.event.attempt_count} - HTTP {self.status_code}"

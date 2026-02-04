@@ -4,12 +4,15 @@ import { Modal } from '../components/ui/Modal'
 import { useApi } from '../hooks/useApi'
 import { webhookAPI } from '../services/api' // ← Import webhookAPI directly
 import { Toast } from '../components/ui/Toast'
+import { WebhookEventsModal } from '../components/webhooks/WebhookEventsModal'
 
 export const WebhooksPage = () => {
   const [webhooks, setWebhooks] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [toasts, setToasts] = useState([])
+  const [selectedWebhookForEvents, setSelectedWebhookForEvents] = useState(null)
+  const [showEventsModal, setShowEventsModal] = useState(false)
   
   const [formData, setFormData] = useState({
     url: '',
@@ -257,6 +260,17 @@ export const WebhooksPage = () => {
                     <span>🗑️</span>
                     Delete
                   </Button>
+                  <Button
+                    onClick={() => {
+                      setSelectedWebhookForEvents(webhook)
+                      setShowEventsModal(true)
+                    }}
+                    variant="secondary"
+                    size="sm"
+                  >
+                    <span>📊</span>
+                    View Events
+                  </Button>
                 </div>
               </div>
             ))}
@@ -304,10 +318,21 @@ export const WebhooksPage = () => {
             </label>
             <div className="space-y-2">
               {[
-                { value: 'document.signature_created', label: '👤 Signature Created', desc: 'When a recipient signs fields' },
-                { value: 'document.completed', label: '✅ Document Completed', desc: 'When all signatures are collected' },
-                { value: 'document.locked', label: '🔒 Document Locked', desc: 'When a version is locked' },
-                { value: 'document.status_changed', label: '🔄 Status Changed', desc: 'When document status updates' },
+                  { 
+                    value: 'document.signature_created', 
+                    label: '👤 Signature Created', 
+                    desc: 'When a recipient signs fields' 
+                  },
+                  { 
+                    value: 'document.completed', 
+                    label: '✅ Document Completed', 
+                    desc: 'When all signatures are collected' 
+                  },
+                  { 
+                    value: 'document.status_changed', 
+                    label: '🔄 Status Changed', 
+                    desc: 'When document status updates (draft → locked → partially signed → completed)' 
+                  },
               ].map((event) => (
                 <label 
                   key={event.value} 
@@ -352,6 +377,13 @@ export const WebhooksPage = () => {
           </div>
         </div>
       </Modal>
+
+      {/* Webhook Events Modal */}
+      <WebhookEventsModal 
+        isOpen={showEventsModal}
+        onClose={() => setShowEventsModal(false)}
+        webhook={selectedWebhookForEvents}
+      />
 
       {/* Toast Notifications */}
       {toasts.map((toast) => (
