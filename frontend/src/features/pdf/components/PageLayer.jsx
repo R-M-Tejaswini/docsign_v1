@@ -1,4 +1,7 @@
-import { fieldPctToPx } from '../../utils/coords'
+import { useEffect, useRef } from 'react'
+
+// ✅ FIXED: Import from same feature, no .js extension
+import { pctToPx, fieldPctToPx } from '../utils/coords'
 
 export const PageLayer = ({
   pageWidth = 612,
@@ -21,6 +24,7 @@ export const PageLayer = ({
     >
       {/* Render fields - static display mode */}
       {fields.map((field) => {
+        // ✅ FIXED: Use fieldPctToPx for proper conversion
         const pxField = fieldPctToPx(field, pageWidth, pageHeight)
         return (
           <div
@@ -67,7 +71,7 @@ export const PageLayer = ({
         )
       })}
 
-      {/* Children for draggable overlays (FieldOverlay) - NO SCALE TRANSFORM */}
+      {/* Children for draggable overlays (FieldOverlay) */}
       {children}
     </div>
   )

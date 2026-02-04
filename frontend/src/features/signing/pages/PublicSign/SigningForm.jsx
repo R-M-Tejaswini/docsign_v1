@@ -8,7 +8,8 @@ import { PageLayer } from '../../../pdf/components/PageLayer'
 import { Button } from '../../../../shared/components/ui/Button'
 import { useApi } from '../../../../shared/hooks/useApi'
 import { publicAPI } from '../../api'
-import { fieldPctToPx } from '../../../fields/utils/coords'
+import { fieldPctToPx } from '../../../utils/coords'
+
 
 export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
   const [signerName, setSignerName] = useState('')

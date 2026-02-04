@@ -1,4 +1,8 @@
-import { getFieldDisplayInfo } from '../../utils/fieldRules'
+import { Button } from '../../../shared/components/ui/Button'
+
+// ✅ FIXED: Field utilities from same feature
+import { FIELD_TYPE_INFO } from '../types'
+import { getFieldDisplayInfo } from '../utils/fieldRules'
 
 export const FieldPalette = ({ onSelectFieldType }) => {
   const fieldTypes = ['text', 'signature', 'date', 'checkbox']

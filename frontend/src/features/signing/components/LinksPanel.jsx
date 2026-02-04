@@ -4,12 +4,17 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Button } from '../ui/Button'
-import { useApi } from '../../hooks/useApi'
-import { useClipboard } from '../../hooks/useClipboard'
-import { tokenAPI } from '../../services/api'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { Modal } from '../../../shared/components/ui/Modal'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { tokenAPI } from '../../../shared/utils/api'
+
+import { LinkCard } from './LinkCard'
 import { GenerateLinkModal } from './GenerateLinkModal'
-import { getRecipientBadgeClasses } from '../../utils/recipientColors'
 
 // ✅ UPDATED: Removed version prop
 export const LinksPanel = ({ document }) => {

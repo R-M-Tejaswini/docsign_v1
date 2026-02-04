@@ -1,16 +1,22 @@
 import { useState, useEffect } from 'react'
-import { Button } from '../components/ui/Button'
-import { Modal } from '../components/ui/Modal'
-import { useApi } from '../hooks/useApi'
-import { webhookAPI } from '../services/api' // ← Import webhookAPI directly
-import { Toast } from '../components/ui/Toast'
-import { WebhookEventsModal } from '../components/webhooks/WebhookEventsModal'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { Modal } from '../../../shared/components/ui/Modal'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { EmptyState } from '../../../shared/components/EmptyState'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { webhookAPI } from '../../../shared/utils/api'
+
+import { WebhookCard } from '../components/WebhookCard'
+import { CreateWebhookModal } from '../components/CreateWebhookModal'
+import { WebhookEventsList } from '../components/WebhookEventsList'
 
 export const WebhooksPage = () => {
   const [webhooks, setWebhooks] = useState([])
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [toasts, setToasts] = useState([])
   const [selectedWebhookForEvents, setSelectedWebhookForEvents] = useState(null)
   const [showEventsModal, setShowEventsModal] = useState(false)
   
@@ -146,244 +152,57 @@ export const WebhooksPage = () => {
         {/* Loading State */}
         {loading ? (
           <div className="text-center py-20">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
+            <LoadingSpinner />
             <p className="text-gray-600 font-medium">Loading webhooks...</p>
           </div>
         ) : webhooks.length === 0 ? (
           /* Empty State */
-          <div className="bg-white rounded-2xl shadow-lg p-16 text-center">
-            <div className="text-7xl mb-6">🪝</div>
-            <h2 className="text-3xl font-bold text-gray-900 mb-3">
-              No webhooks configured
-            </h2>
-            <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto leading-relaxed">
-              Create your first webhook to receive real-time notifications about document signing events
-            </p>
-            <Button
-              onClick={() => setShowCreateModal(true)}
-              variant="primary"
-              size="lg"
-            >
-              <span>➕</span>
-              Create Your First Webhook
-            </Button>
-          </div>
+          <EmptyState
+            title="No webhooks configured"
+            description="Create your first webhook to receive real-time notifications about document signing events"
+            ctaText="Create Your First Webhook"
+            onCtaClick={() => setShowCreateModal(true)}
+            icon="🪝"
+          />
         ) : (
           /* Webhooks List */
           <div className="space-y-4">
             {webhooks.map((webhook) => (
-              <div
+              <WebhookCard
                 key={webhook.id}
-                className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-200 p-6 border-2 border-gray-100"
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-3">
-                      <h3 className="text-lg font-bold text-gray-900 break-all">
-                        {webhook.url}
-                      </h3>
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold shadow-sm ${
-                        webhook.is_active
-                          ? 'bg-green-100 text-green-800 border-2 border-green-200'
-                          : 'bg-gray-100 text-gray-800 border-2 border-gray-200'
-                      }`}>
-                        {webhook.is_active ? '✓ Active' : '○ Inactive'}
-                      </span>
-                    </div>
-
-                    {/* Events */}
-                    <div className="text-sm text-gray-600 mb-4">
-                      <strong className="font-semibold">Events:</strong>{' '}
-                      {webhook.events_list?.join(', ') || 'None'}
-                    </div>
-
-                    {/* Statistics */}
-                    <div className="grid grid-cols-4 gap-4 bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-xl border border-gray-200">
-                      <div className="text-center">
-                        <div className="text-xs text-gray-600 font-semibold uppercase mb-1">Total</div>
-                        <div className="text-2xl font-bold text-gray-900">
-                          {webhook.total_deliveries}
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs text-gray-600 font-semibold uppercase mb-1">Success</div>
-                        <div className="text-2xl font-bold text-green-600">
-                          {webhook.successful_deliveries}
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs text-gray-600 font-semibold uppercase mb-1">Failed</div>
-                        <div className="text-2xl font-bold text-red-600">
-                          {webhook.failed_deliveries}
-                        </div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs text-gray-600 font-semibold uppercase mb-1">Success Rate</div>
-                        <div className="text-2xl font-bold text-blue-600">
-                          {webhook.success_rate ?? 'N/A'}%
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Last Triggered */}
-                    {webhook.last_triggered_at && (
-                      <div className="text-xs text-gray-500 mt-3 font-semibold">
-                        Last triggered: {new Date(webhook.last_triggered_at).toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Secret */}
-                  <div className="ml-6 bg-gray-50 p-4 rounded-lg border-2 border-gray-200 text-right max-w-xs">
-                    <div className="text-xs text-gray-600 mb-2 font-semibold uppercase">Secret</div>
-                    <code className="text-xs font-mono text-gray-700 break-all block">
-                      {webhook.secret?.substring(0, 20)}...
-                    </code>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-2 pt-4 border-t-2 border-gray-200">
-                  <Button
-                    onClick={() => handleTestWebhook(webhook.id)}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    <span>🧪</span>
-                    Send Test
-                  </Button>
-                  <Button
-                    onClick={() => handleDeleteWebhook(webhook.id)}
-                    variant="danger"
-                    size="sm"
-                  >
-                    <span>🗑️</span>
-                    Delete
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      setSelectedWebhookForEvents(webhook)
-                      setShowEventsModal(true)
-                    }}
-                    variant="secondary"
-                    size="sm"
-                  >
-                    <span>📊</span>
-                    View Events
-                  </Button>
-                </div>
-              </div>
+                webhook={webhook}
+                onTest={handleTestWebhook}
+                onDelete={handleDeleteWebhook}
+                onViewEvents={() => {
+                  setSelectedWebhookForEvents(webhook)
+                  setShowEventsModal(true)
+                }}
+              />
             ))}
           </div>
         )}
       </div>
 
       {/* Create Webhook Modal */}
-      <Modal 
+      <CreateWebhookModal 
         isOpen={showCreateModal} 
         onClose={() => setShowCreateModal(false)}
-        title="Create Webhook"
-      >
-        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
-          {/* URL Input */}
-          <div>
-            <label className="block text-sm font-bold text-gray-900 mb-2">
-              Webhook URL <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="url"
-              value={formData.url}
-              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-              placeholder="https://example.com/webhooks/docsign"
-              className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 text-base"
-            />
-            <p className="text-xs text-gray-600 mt-2">
-              💡 Tip: Use{' '}
-              <a 
-                href="https://webhook.site" 
-                target="_blank" 
-                rel="noopener noreferrer" 
-                className="text-blue-600 hover:underline font-semibold"
-              >
-                webhook.site
-              </a>
-              {' '}for testing
-            </p>
-          </div>
-
-          {/* Events Checkboxes */}
-          <div>
-            <label className="block text-sm font-bold text-gray-900 mb-3">
-              Subscribe to Events <span className="text-red-500">*</span>
-            </label>
-            <div className="space-y-2">
-              {[
-                  { 
-                    value: 'document.signature_created', 
-                    label: '👤 Signature Created', 
-                    desc: 'When a recipient signs fields' 
-                  },
-                  { 
-                    value: 'document.completed', 
-                    label: '✅ Document Completed', 
-                    desc: 'When all signatures are collected' 
-                  },
-                  { 
-                    value: 'document.status_changed', 
-                    label: '🔄 Status Changed', 
-                    desc: 'When document status updates (draft → locked → partially signed → completed)' 
-                  },
-              ].map((event) => (
-                <label 
-                  key={event.value} 
-                  className={`flex items-start gap-3 p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                    formData.subscribed_events.includes(event.value)
-                      ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
-                      : 'border-gray-300 hover:border-gray-400'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={formData.subscribed_events.includes(event.value)}
-                    onChange={() => toggleEvent(event.value)}
-                    className="w-5 h-5 text-blue-600 rounded mt-0.5"
-                  />
-                  <div className="flex-1">
-                    <span className="text-sm font-bold text-gray-900 block">{event.label}</span>
-                    <span className="text-xs text-gray-600">{event.desc}</span>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-3 pt-4 border-t-2 border-gray-200">
-            <Button
-              onClick={() => setShowCreateModal(false)}
-              variant="secondary"
-              className="flex-1"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleCreateWebhook}
-              variant="primary"
-              className="flex-1"
-            >
-              <span>➕</span>
-              Create Webhook
-            </Button>
-          </div>
-        </div>
-      </Modal>
+        onCreate={handleCreateWebhook}
+        formData={formData}
+        setFormData={setFormData}
+        toggleEvent={toggleEvent}
+      />
 
       {/* Webhook Events Modal */}
-      <WebhookEventsModal 
+      <Modal 
         isOpen={showEventsModal}
         onClose={() => setShowEventsModal(false)}
-        webhook={selectedWebhookForEvents}
-      />
+        title="Webhook Events"
+      >
+        <div className="p-4">
+          <WebhookEventsList webhookId={selectedWebhookForEvents?.id} />
+        </div>
+      </Modal>
 
       {/* Toast Notifications */}
       {toasts.map((toast) => (

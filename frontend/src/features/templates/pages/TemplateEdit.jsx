@@ -1,14 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { DocumentViewer } from '../components/pdf/DocumentViewer'
-import { PageLayer } from '../components/pdf/PageLayer'
-import { FieldPalette } from '../components/fields/FieldPalette'
-import { FieldOverlay } from '../components/fields/FieldOverlay'
-import { FieldEditor } from '../components/fields/FieldEditor'
-import { Button } from '../components/ui/Button'
-import { Toast } from '../components/ui/Toast'
-import { useApi } from '../hooks/useApi'
-import { templateAPI } from '../services/api'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { Input } from '../../../shared/components/ui/Input'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { templateAPI } from '../../../shared/utils/api'
+
+// ✅ FIXED: PDF components from correct feature
+import { DocumentViewer } from '../../pdf/components/DocumentViewer'
+import { PageLayer } from '../../pdf/components/PageLayer'
+import { FieldPalette } from '../../fields/components/FieldPalette'
+import { FieldOverlay } from '../../pdf/components/FieldOverlay'
+import { FieldEditor } from '../../fields/components/FieldEditor'
 
 export const TemplateEdit = () => {
   const { id } = useParams()

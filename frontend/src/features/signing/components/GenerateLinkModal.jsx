@@ -4,11 +4,15 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Modal } from '../ui/Modal'
-import { Button } from '../ui/Button'
-import { useApi } from '../../hooks/useApi'
-import { tokenAPI, documentAPI } from '../../services/api'
-import { getRecipientBadgeClasses } from '../../utils/recipientColors'
+
+// ✅ FIXED: Import from shared
+import { Modal } from '../../../shared/components/ui/Modal'
+import { Button } from '../../../shared/components/ui/Button'
+import { Input } from '../../../shared/components/ui/Input'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { tokenAPI, documentAPI } from '../../../shared/utils/api'
+import { getRecipientBadgeClasses } from '../../../shared/utils/recipientColors'
 
 // ✅ UPDATED: Removed version prop from function signature
 export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {

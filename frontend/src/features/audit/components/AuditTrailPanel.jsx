@@ -3,11 +3,16 @@
  * Now displays audit trail directly for documents (no version_id)
  */
 
-import { useState } from 'react'
-import { Button } from '../ui/Button'
-import { useApi } from '../../hooks/useApi'
-import { useClipboard } from '../../hooks/useClipboard'
-import { documentAPI } from '../../services/api'
+import { useState, useEffect } from 'react'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { useApi } from '../../../shared/hooks/useApi'
+import { signatureAPI } from '../../../shared/utils/api'
+
+import { SignatureCard } from './SignatureCard'
+import { VerificationStatus } from './VerificationStatus'
 
 export const AuditTrailPanel = ({ document: doc }) => {  // ✅ Removed version prop
   const [expandedSignatureId, setExpandedSignatureId] = useState(null)

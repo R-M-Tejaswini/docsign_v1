@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Button } from '../ui/Button'
-import { getRecipientBadgeClasses } from '../../utils/recipientColors'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { Input } from '../../../shared/components/ui/Input'
+
+// ✅ FIXED: Field utilities from same feature
+import { validateField, validateFieldValue } from '../utils/fieldValidation'
+import { FIELD_TYPE_INFO } from '../types'
 
 export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], canEdit = true }) => {
   const [label, setLabel] = useState(field?.label || '')

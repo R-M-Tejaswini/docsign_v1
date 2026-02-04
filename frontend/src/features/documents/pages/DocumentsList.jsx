@@ -7,11 +7,21 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Button } from '../components/ui/Button'
-import { Modal } from '../components/ui/Modal'
-import { useApi } from '../hooks/useApi'
-import { documentAPI, templateAPI } from '../services/api'
-import { getRecipientBadgeClasses } from '../utils/recipientColors'
+
+// ✅ FIXED: Import from shared, not relative
+import { Button } from '../../../shared/components/ui/Button'
+import { Modal } from '../../../shared/components/ui/Modal'
+import { Input } from '../../../shared/components/ui/Input'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { EmptyState } from '../../../shared/components/EmptyState'
+import { StatusBadge } from '../../../shared/components/StatusBadge'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { documentAPI, templateAPI } from '../../../shared/utils/api'
+
+import { DocumentCard } from '../components/DocumentCard'
+import { DocumentGrid } from '../components/DocumentGrid'
+import { CreateDocumentModal } from '../components/CreateDocumentModal'
 
 export const DocumentsList = () => {
   const navigate = useNavigate()

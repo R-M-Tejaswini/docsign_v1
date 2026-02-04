@@ -1,9 +1,18 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Button } from '../components/ui/Button'
-import { Modal } from '../components/ui/Modal'
-import { useApi } from '../hooks/useApi'
-import { templateAPI } from '../services/api'
+
+// ✅ FIXED: Import from shared
+import { Button } from '../../../shared/components/ui/Button'
+import { Modal } from '../../../shared/components/ui/Modal'
+import { Input } from '../../../shared/components/ui/Input'
+import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { EmptyState } from '../../../shared/components/EmptyState'
+import { useApi } from '../../../shared/hooks/useApi'
+import { useToast } from '../../../shared/hooks/useToast'
+import { templateAPI } from '../../../shared/utils/api'
+
+import { TemplateCard } from '../components/TemplateCard'
+import { CreateTemplateModal } from '../components/CreateTemplateModal'
 
 export const TemplatesList = () => {
   const navigate = useNavigate()

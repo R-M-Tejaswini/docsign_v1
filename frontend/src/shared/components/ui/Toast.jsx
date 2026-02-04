@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
 
+/**
+ * ✅ UNIFIED: Toast notification component
+ */
+
 export const Toast = ({ message, type = 'info', duration = 3000, onClose }) => {
   const [isVisible, setIsVisible] = useState(true)
   const [isExiting, setIsExiting] = useState(false)
@@ -19,49 +23,32 @@ export const Toast = ({ message, type = 'info', duration = 3000, onClose }) => {
 
   if (!isVisible) return null
 
+  const typeClasses = {
+    success: 'bg-green-100 text-green-800 border-green-300',
+    error: 'bg-red-100 text-red-800 border-red-300',
+    warning: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+    info: 'bg-blue-100 text-blue-800 border-blue-300',
+  }
+
   const icons = {
     success: '✓',
     error: '✕',
-    info: 'ℹ',
     warning: '⚠',
-  }
-
-  const typeStyles = {
-    success: 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg',
-    error: 'bg-gradient-to-r from-red-500 to-red-600 text-white shadow-lg',
-    info: 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg',
-    warning: 'bg-gradient-to-r from-yellow-500 to-yellow-600 text-white shadow-lg',
+    info: 'ℹ',
   }
 
   return (
-    <div
-      className={`
-        fixed bottom-4 right-4 px-5 py-3 rounded-lg z-50 
-        flex items-center gap-3 min-w-[280px] max-w-md
-        ${typeStyles[type]}
-        ${isExiting ? 'animate-fade-out' : 'animate-slide-in'}
-      `}
-      style={{
-        animation: isExiting 
-          ? 'fadeOut 0.3s ease-out forwards' 
-          : 'slideIn 0.3s ease-out'
-      }}
-    >
+    <div className={`
+      fixed bottom-4 right-4 p-4 rounded-lg border-2 shadow-lg 
+      ${typeClasses[type]} flex items-center gap-3 max-w-sm z-50 animate-in
+    `}>
       <span className="text-xl font-bold">{icons[type]}</span>
-      <span className="flex-1 font-medium">{message}</span>
+      <span className="flex-1">{message}</span>
       <button
-        onClick={() => {
-          setIsExiting(true)
-          setTimeout(() => {
-            setIsVisible(false)
-            onClose?.()
-          }, 300)
-        }}
-        className="text-white hover:text-gray-200 transition-colors ml-2"
+        onClick={onClose}
+        className="text-lg font-bold opacity-50 hover:opacity-100 transition-opacity"
       >
-        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-          <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-        </svg>
+        ✕
       </button>
     </div>
   )
