@@ -1,15 +1,20 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
+
+// Pages
 import { HomePage } from './pages/HomePage'
-import { DocumentsList } from './pages/DocumentsList'
-import { DocumentEdit } from './pages/DocumentEdit'
-import { TemplatesList } from './pages/TemplatesList'
-import { TemplateEdit } from './pages/TemplateEdit'
-import { PublicSign } from './pages/PublicSign'
-import { WebhooksPage } from './pages/WebhooksPage'
+import { DocumentsList } from './features/documents/pages/DocumentsList'
+import { DocumentEdit } from './features/documents/pages/DocumentEdit'
+import { TemplatesList } from './features/templates/pages/TemplatesList'
+import { TemplateEdit } from './features/templates/pages/TemplateEdit'
+import { PublicSign } from './features/signing/pages/PublicSign'
+import { WebhooksPage } from './features/webhooks/pages/WebhooksPage'
+
+// Shared
+import { ErrorBoundary } from './shared/components/ErrorBoundary'
 
 function Navigation() {
   const location = useLocation()
-  
+
   // Hide navigation on public sign pages
   if (location.pathname.includes('/sign/')) {
     return null
@@ -28,10 +33,7 @@ function Navigation() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
-          <Link 
-            to="/" 
-            className="flex items-center gap-3 group transition-all"
-          >
+          <Link to="/" className="flex items-center gap-3 group transition-all">
             <div className="text-3xl group-hover:scale-110 transition-transform">📝</div>
             <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
               DocSign
@@ -47,9 +49,10 @@ function Navigation() {
                 className={`
                   px-4 py-2 rounded-lg font-semibold transition-all duration-200
                   flex items-center gap-2
-                  ${isActive(link.to)
-                    ? 'bg-blue-100 text-blue-700 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
+                  ${
+                    isActive(link.to)
+                      ? 'bg-blue-100 text-blue-700 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }
                 `}
               >
@@ -66,20 +69,22 @@ function Navigation() {
 
 function App() {
   return (
-    <Router>
-      <div className="min-h-screen bg-gray-50">
-        <Navigation />
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/documents" element={<DocumentsList />} />
-          <Route path="/documents/:id" element={<DocumentEdit />} />
-          <Route path="/templates" element={<TemplatesList />} />
-          <Route path="/templates/:id" element={<TemplateEdit />} />
-          <Route path="/sign/:token" element={<PublicSign />} />
-          <Route path="/webhooks" element={<WebhooksPage />} />
-        </Routes>
-      </div>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <div className="min-h-screen bg-gray-50">
+          <Navigation />
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/documents" element={<DocumentsList />} />
+            <Route path="/documents/:id" element={<DocumentEdit />} />
+            <Route path="/templates" element={<TemplatesList />} />
+            <Route path="/templates/:id" element={<TemplateEdit />} />
+            <Route path="/sign/:token" element={<PublicSign />} />
+            <Route path="/webhooks" element={<WebhooksPage />} />
+          </Routes>
+        </div>
+      </Router>
+    </ErrorBoundary>
   )
 }
 
