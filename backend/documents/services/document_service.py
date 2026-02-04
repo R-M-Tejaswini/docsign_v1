@@ -1,13 +1,11 @@
 """
 Document business logic service layer.
-
-✅ CONSOLIDATED: Updated to work directly with Document (no DocumentVersion)
 """
 
 from django.db import models as django_models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from .hashing import HashingService
+from core.services import HashingService  # ← Import from core
 
 
 class DocumentService:
@@ -15,21 +13,13 @@ class DocumentService:
     
     @staticmethod
     def get_recipients(document):
-        """
-        Get list of unique recipients assigned to fields in a document.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Get list of unique recipients assigned to fields."""
         recipients = document.fields.values_list('recipient', flat=True).distinct()
         return sorted([r for r in recipients if r and r.strip()])
     
     @staticmethod
     def get_recipient_status(document):
-        """
-        Get signing status per recipient.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Get signing status per recipient."""
         all_fields = list(document.fields.all())
         recipients = set(f.recipient for f in all_fields if f.recipient and f.recipient.strip())
         status = {}
@@ -51,11 +41,7 @@ class DocumentService:
     
     @staticmethod
     def can_generate_sign_link(document, recipient):
-        """
-        Check if a sign link can be generated for a specific recipient.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Check if a sign link can be generated for a specific recipient."""
         if document.status == 'draft':
             return False, "Document must be locked before generating sign links"
         
@@ -68,7 +54,9 @@ class DocumentService:
             return False, f"{recipient} has already completed signing"
         
         # Check if active sign token exists
-        active_token = document.tokens.filter(
+        from signing.models import SigningToken
+        active_token = SigningToken.objects.filter(
+            document=document,
             recipient=recipient,
             scope='sign',
             revoked=False
@@ -83,31 +71,19 @@ class DocumentService:
     
     @staticmethod
     def can_generate_view_link(document):
-        """
-        Check if a view link can be generated for the document.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Check if a view link can be generated for the document."""
         if document.status == 'draft':
             return False, "Document must be locked before generating view links"
         return True, None
     
     @staticmethod
     def compute_sha256(document):
-        """
-        Compute SHA256 hash of the PDF file.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Compute SHA256 hash of the PDF file."""
         return HashingService.compute_file_sha256(document.file)
     
     @staticmethod
     def compute_signed_pdf_hash(document):
-        """
-        Compute SHA256 hash of the signed/flattened PDF file.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Compute SHA256 hash of the signed/flattened PDF file."""
         if not document.signed_file:
             return None
         
@@ -119,23 +95,13 @@ class DocumentService:
     
     @staticmethod
     def update_signed_pdf_hash(document):
-        """
-        Update signed_pdf_sha256 field after flattening.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        """
+        """Update signed_pdf_sha256 field after flattening."""
         document.signed_pdf_sha256 = DocumentService.compute_signed_pdf_hash(document)
         document.save(update_fields=['signed_pdf_sha256'])
     
     @staticmethod
     def update_document_status(document):
-        """
-        Update document status based on recipient completion.
-        
-        ✅ CONSOLIDATED: Now operates on Document directly
-        - Removed version concept
-        - Auto-generates signed PDF when moved to 'completed'
-        """
+        """Update document status based on recipient completion."""
         if document.status == 'draft':
             return
         
@@ -159,7 +125,7 @@ class DocumentService:
         # Auto-generate signed PDF when completed
         if document.status == 'completed' and not document.signed_file:
             try:
-                from . import get_pdf_flattening_service
+                from documents.services import get_pdf_flattening_service
                 service = get_pdf_flattening_service()
                 service.flatten_and_save(document)
             except Exception as e:
@@ -167,6 +133,7 @@ class DocumentService:
 
 
 _document_service = None
+
 
 def get_document_service() -> DocumentService:
     """Get singleton instance of document service."""

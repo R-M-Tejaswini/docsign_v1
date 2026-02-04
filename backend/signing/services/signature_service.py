@@ -1,11 +1,8 @@
 """
 Signature event business logic service layer.
-
-✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
 """
 
-from django.utils import timezone
-from .hashing import HashingService
+from core.services import HashingService
 
 
 class SignatureService:
@@ -26,12 +23,8 @@ class SignatureService:
     
     @staticmethod
     def verify_signature_integrity(signature_event, document):
-        """
-        Verify complete integrity of a signature event.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
-        from .document_service import DocumentService
+        """Verify complete integrity of a signature event."""
+        from documents.services import get_document_service
         
         # Recompute event hash
         current_event_hash = SignatureService.compute_event_hash(signature_event)
@@ -39,14 +32,15 @@ class SignatureService:
         event_hash_valid = current_event_hash == stored_event_hash
         
         # Check document hash
-        current_pdf_hash = DocumentService.compute_sha256(document)
+        doc_service = get_document_service()
+        current_pdf_hash = doc_service.compute_sha256(document)
         stored_pdf_hash = signature_event.document_sha256
         document_hash_valid = current_pdf_hash == stored_pdf_hash
         
         # Check signed PDF hash
         signed_pdf_valid = True
         if document.signed_file and document.signed_pdf_sha256:
-            current_signed_pdf_hash = DocumentService.compute_signed_pdf_hash(document)
+            current_signed_pdf_hash = doc_service.compute_signed_pdf_hash(document)
             signed_pdf_valid = current_signed_pdf_hash == document.signed_pdf_sha256
         
         is_valid = event_hash_valid and document_hash_valid and signed_pdf_valid
@@ -67,7 +61,7 @@ class SignatureService:
                 },
                 'signed_pdf_hash': {
                     'stored': document.signed_pdf_sha256,
-                    'current': DocumentService.compute_signed_pdf_hash(document) if document.signed_file else None,
+                    'current': doc_service.compute_signed_pdf_hash(document) if document.signed_file else None,
                 }
             }
         }

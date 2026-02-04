@@ -11,6 +11,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.colors import HexColor
+from core.services import HashingService
 
 
 class PDFFontManager:

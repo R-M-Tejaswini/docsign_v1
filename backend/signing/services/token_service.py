@@ -1,7 +1,5 @@
 """
 Signing token business logic service layer.
-
-✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
 """
 
 import secrets
@@ -17,8 +15,6 @@ class SigningTokenService:
         """
         Generate a new signing token.
         
-        ✅ CONSOLIDATED: Now works with Document directly
-        
         Args:
             document: Document instance
             scope: 'sign' or 'view'
@@ -27,23 +23,22 @@ class SigningTokenService:
             
         Returns:
             SigningToken: The created token
-            
-        Raises:
-            ValidationError: If validation fails
         """
-        from .document_service import DocumentService
+        from documents.services import get_document_service
         from ..models import SigningToken
         
         if scope == 'sign':
             if not recipient:
                 raise ValidationError('Sign tokens must specify a recipient')
             
-            can_generate, error = DocumentService.can_generate_sign_link(document, recipient)
+            doc_service = get_document_service()
+            can_generate, error = doc_service.can_generate_sign_link(document, recipient)
             if not can_generate:
                 raise ValidationError(error)
         else:
             # View token
-            can_generate, error = DocumentService.can_generate_view_link(document)
+            doc_service = get_document_service()
+            can_generate, error = doc_service.can_generate_view_link(document)
             if not can_generate:
                 raise ValidationError(error)
         
@@ -52,7 +47,7 @@ class SigningTokenService:
         
         return SigningToken.objects.create(
             token=token_str,
-            document=document,  # ✅ CONSOLIDATED: Use document directly
+            document=document,
             scope=scope,
             recipient=recipient,
             expires_at=expires_at

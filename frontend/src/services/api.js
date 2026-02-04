@@ -1,6 +1,7 @@
 /**
- * ✅ UPDATED: Removed version_id parameters from all calls
- * All other functionality remains identical
+ * ✅ UPDATED: New app structure with separated signing and webhooks apps
+ * 
+ * All API endpoints properly routed to their respective apps.
  */
 
 import axios from 'axios'
@@ -21,6 +22,7 @@ export const templateAPI = {
   create: (formData) => {
     const data = new FormData()
     data.append('title', formData.title)
+    if (formData.description) data.append('description', formData.description)
     data.append('file', formData.file)
     return api.post('/templates/', data, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -28,11 +30,8 @@ export const templateAPI = {
   },
   
   get: (id) => api.get(`/templates/${id}/`),
-  
   update: (id, data) => api.patch(`/templates/${id}/`, data),
-  
   delete: (id) => api.delete(`/templates/${id}/`),
-  
   getRecipients: (templateId) => api.get(`/templates/${templateId}/recipients/`),
   
   createField: (templateId, fieldData) =>
@@ -45,40 +44,35 @@ export const templateAPI = {
     api.delete(`/templates/${templateId}/fields/${fieldId}/`),
 }
 
-// ===== DOCUMENT ENDPOINTS (✅ UPDATED: NO version_id) =====
+// ===== DOCUMENT ENDPOINTS (CRUD + fields only) =====
 export const documentAPI = {
   list: () => api.get('/documents/'),
   
   create: (formData) => {
     const data = new FormData()
     data.append('title', formData.title)
-    if (formData.description) {
-      data.append('description', formData.description)
-    }
-    if (formData.template_id) {
-      data.append('template_id', formData.template_id)
-    }
-    if (formData.file) {
-      data.append('file', formData.file)
-    }
+    if (formData.description) data.append('description', formData.description)
+    if (formData.template_id) data.append('template_id', formData.template_id)
+    if (formData.file) data.append('file', formData.file)
+    
     return api.post('/documents/', data, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
   
   get: (id) => api.get(`/documents/${id}/`),
-  
   update: (id, data) => api.patch(`/documents/${id}/`, data),
-  
   delete: (id) => api.delete(`/documents/${id}/`),
   
-  // ✅ UPDATED: Duplicate document (replaces copyVersion)
+  // Document actions
   duplicate: (id) => api.post(`/documents/${id}/duplicate/`),
-  
   lock: (id) => api.post(`/documents/${id}/lock/`),
-  
   getAvailableRecipients: (id) => api.get(`/documents/${id}/recipients/`),
+  download: (id) => api.get(`/documents/${id}/download/`, {
+    responseType: 'blob'
+  }),
   
+  // Field management
   createField: (docId, fieldData) =>
     api.post(`/documents/${docId}/fields/`, fieldData),
   
@@ -87,74 +81,86 @@ export const documentAPI = {
   
   deleteField: (docId, fieldId) =>
     api.delete(`/documents/${docId}/fields/${fieldId}/`),
+}
+
+// ===== SIGNING TOKEN ENDPOINTS (NEW APP: signing) =====
+export const tokenAPI = {
+  create: (docId, tokenData) =>
+    api.post(`/documents/${docId}/links/`, tokenData),
   
-  download: (id) =>
-    api.get(`/documents/${id}/download/`, {
-      responseType: 'blob'
+  listForDocument: (docId) =>
+    api.get(`/documents/${docId}/links/`),
+  
+  revoke: (token) =>
+    api.post('/links/revoke/', { token }),
+}
+
+// ===== PUBLIC SIGNING ENDPOINTS (NO AUTH REQUIRED) =====
+export const publicAPI = {
+  // Get signing page data
+  getSignPage: (token) =>
+    api.get(`/public/sign/${token}/`, {
+      headers: { 'Authorization': '' },
     }),
   
-  getSignatures: (id) =>
-    api.get(`/documents/${id}/signatures/`),
+  // Submit signature
+  submitSignature: (token, signData) =>
+    api.post(`/public/sign/${token}/`, signData, {
+      headers: { 'Authorization': '' },
+    }),
+  
+  // Download public document
+  downloadPublicDocument: (token) =>
+    api.get(`/public/download/${token}/`, {
+      headers: { 'Authorization': '' },
+      responseType: 'blob'
+    }),
+}
+
+// ===== SIGNATURE VERIFICATION & AUDIT (NEW APP: signing) =====
+export const signatureAPI = {
+  listSignatures: (docId) =>
+    api.get(`/documents/${docId}/signatures/`),
   
   verifySignature: (docId, sigId) =>
     api.get(`/documents/${docId}/signatures/${sigId}/verify/`),
   
-  downloadAuditExport: (id) =>
-    api.get(`/documents/${id}/audit_export/`, {
+  downloadAuditExport: (docId) =>
+    api.get(`/documents/${docId}/audit_export/`, {
       responseType: 'blob'
     }),
 }
 
-// ===== SIGNING TOKEN ENDPOINTS (✅ UPDATED: NO version_id) =====
-export const tokenAPI = {
-  // ✅ UPDATED: docId only (no version_id)
-  create: (docId, tokenData) =>
-    api.post(`/documents/${docId}/links/`, tokenData),
-  
-  listForDocument: (docId) => api.get(`/documents/${docId}/links/`),
-  
-  revoke: (token) =>
-    api.post('/documents/links/revoke/', { token }),
-}
-
-// ===== PUBLIC SIGNING ENDPOINTS (NO AUTH) =====
-export const publicAPI = {
-  getSignPage: (token) =>
-    api.get(`/documents/public/sign/${token}/`, {
-      headers: { 'Authorization': '' },
-    }),
-  
-  submitSignature: (token, signData) =>
-    api.post(`/documents/public/sign/${token}/`, signData, {
-      headers: { 'Authorization': '' },
-    }),
-  
-  downloadPublicDocument: (token) =>
-    api.get(`/documents/public/download/${token}/`, {
-      headers: { 'Authorization': '' },
-      responseType: 'blob'
-    }),
-}
-
-// ===== WEBHOOK ENDPOINTS =====
+// ===== WEBHOOK ENDPOINTS (NEW APP: webhooks) =====
 export const webhookAPI = {
-  list: () => api.get('/documents/webhooks/'),
+  list: () => api.get('/webhooks/'),
   
-  create: (data) => api.post('/documents/webhooks/', data),
+  create: (data) => api.post('/webhooks/', data),
   
-  get: (id) => api.get(`/documents/webhooks/${id}/`),
+  get: (id) => api.get(`/webhooks/${id}/`),
   
-  update: (id, data) => api.patch(`/documents/webhooks/${id}/`, data),
+  update: (id, data) => api.patch(`/webhooks/${id}/`, data),
   
-  delete: (id) => api.delete(`/documents/webhooks/${id}/`),
+  delete: (id) => api.delete(`/webhooks/${id}/`),
   
-  test: (id) => api.post(`/documents/webhooks/${id}/test/`),
+  // Webhook actions
+  test: (id) => api.post(`/webhooks/${id}/test/`),
   
-  listEvents: (webhookId) => 
-    api.get(`/documents/webhooks/${webhookId}/events/`),
+  retry: (id, eventId) =>
+    api.post(`/webhooks/${id}/retry/`, { event_id: eventId }),
   
-  getEventLogs: (eventId) => 
-    api.get(`/documents/webhook-events/${eventId}/logs/`),
+  // Webhook events
+  listEvents: (webhookId) =>
+    api.get(`/webhooks/${webhookId}/events/`),
+  
+  listAllEvents: () =>
+    api.get('/webhook-events/'),
+  
+  getEvent: (eventId) =>
+    api.get(`/webhook-events/${eventId}/`),
+  
+  getEventLogs: (eventId) =>
+    api.get(`/webhook-events/${eventId}/logs/`),
 }
 
 export default api

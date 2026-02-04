@@ -1,17 +1,13 @@
 """
 Signing process service layer.
-
-✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
 """
 
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
-from .document_service import DocumentService
-from .signature_service import SignatureService
-from .token_service import SigningTokenService
-from .webhook_service import WebhookService
-from ..models import DocumentField, SignatureEvent, SigningToken, Document
+from documents.services import get_document_service
+from documents.models import DocumentField
+from ..models import SignatureEvent, SigningToken
 
 
 class SigningProcessService:
@@ -20,6 +16,7 @@ class SigningProcessService:
     @staticmethod
     def validate_token(signing_token):
         """Validate a signing token."""
+        from .token_service import SigningTokenService
         token_service = SigningTokenService()
         is_valid, error_message = token_service.is_token_valid(signing_token)
         
@@ -48,14 +45,9 @@ class SigningProcessService:
     
     @staticmethod
     def validate_fields_ownership(document, recipient, field_values):
-        """
-        Validate that all fields being signed belong to the recipient.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
+        """Validate that all fields being signed belong to the recipient."""
         field_ids = [fv['field_id'] for fv in field_values]
         
-        # Get fields that belong to this recipient and are not yet signed
         recipient_fields = document.fields.filter(
             id__in=field_ids,
             recipient=recipient,
@@ -71,21 +63,15 @@ class SigningProcessService:
     
     @staticmethod
     def validate_required_fields(document, recipient, field_values):
-        """
-        Validate that all required fields for the recipient are being filled.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
+        """Validate that all required fields for the recipient are being filled."""
         field_ids = set(fv['field_id'] for fv in field_values)
         
-        # Get all required fields for this recipient that aren't signed yet
         required_recipient_fields = document.fields.filter(
             recipient=recipient,
             required=True,
             locked=False
         )
         
-        # Check if all required fields are being filled
         missing_required = required_recipient_fields.exclude(id__in=field_ids)
         
         if missing_required.exists():
@@ -102,11 +88,7 @@ class SigningProcessService:
         ip_address,
         user_agent
     ):
-        """
-        Process a complete signature submission.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
+        """Process a complete signature submission."""
         # Phase 1: Validate everything upfront
         SigningProcessService.validate_token(signing_token)
         SigningProcessService.validate_payload(signer_name, field_values)
@@ -126,7 +108,10 @@ class SigningProcessService:
         
         # Phase 2: Process signature with transaction
         with transaction.atomic():
-            doc_service = DocumentService()
+            from .token_service import SigningTokenService
+            from .signature_service import SignatureService
+            
+            doc_service = get_document_service()
             sig_service = SignatureService()
             token_service = SigningTokenService()
             
@@ -150,7 +135,7 @@ class SigningProcessService:
             
             # Create signature event
             signature_event = SignatureEvent.objects.create(
-                document=document,  # ✅ CONSOLIDATED: Use document directly
+                document=document,
                 token=signing_token,
                 recipient=recipient,
                 signer_name=signer_name,
@@ -166,7 +151,6 @@ class SigningProcessService:
                     'fields_signed': len(field_values)
                 }
             )
-            # Note: event_hash is computed via post_save signal in models.py
             
             # Convert token to view-only
             token_service.convert_to_view_only(signing_token)
@@ -198,6 +182,8 @@ class SigningProcessService:
     @staticmethod
     def _trigger_webhooks(document, signature_event, signer_name, recipient):
         """Trigger webhooks for signature and completion events."""
+        from webhooks.services import WebhookService
+        
         # Trigger signature created event
         WebhookService.trigger_event(
             event_type='document.signature_created',

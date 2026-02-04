@@ -1,7 +1,7 @@
 """
-Unified hashing service for all hash computations.
+core/services/hashing.py
 
-✅ CONSOLIDATED: Updated to work with Document instead of DocumentVersion
+Unified hashing service for all applications (documents, signing, webhooks).
 """
 
 import hashlib
@@ -35,8 +35,7 @@ class HashingService:
     def compute_event_hash(signature_event):
         """
         Compute tamper-evident hash for a signature event.
-        
-        ✅ CONSOLIDATED: Removed version_id, now uses document_id
+        Used by signing app to verify integrity.
         """
         hash_input = {
             'document_sha256': signature_event.document_sha256,
@@ -48,13 +47,14 @@ class HashingService:
             'recipient': signature_event.recipient,
             'signed_at': signature_event.signed_at.isoformat() if signature_event.signed_at else None,
             'token_id': signature_event.token.id if signature_event.token else None,
-            'document_id': signature_event.document.id,  # ✅ CONSOLIDATED: Use document_id
+            'document_id': signature_event.document.id,
         }
         
         return HashingService.compute_json_sha256(hash_input)
 
 
 _hashing_service = None
+
 
 def get_hashing_service() -> HashingService:
     """Get singleton instance of hashing service."""

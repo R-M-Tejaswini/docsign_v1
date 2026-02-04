@@ -57,9 +57,12 @@ INSTALLED_APPS = [
     "rest_framework",
     "corsheaders",
 
-    # Local apps
+    # ✅ LOCAL APPS (in dependency order: core → templates → documents → signing → webhooks)
+    "core",
     "templates",
     "documents",
+    "signing",
+    "webhooks",
 ]
 
 MIDDLEWARE = [

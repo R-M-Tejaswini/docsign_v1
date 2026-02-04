@@ -1,3 +1,7 @@
+"""
+Webhook service for managing events and delivery.
+"""
+
 import json
 import requests
 import logging
@@ -13,24 +17,14 @@ logger = logging.getLogger(__name__)
 class WebhookService:
     """Service for managing webhook events and deliveries."""
     
-    # Maximum retry attempts
     MAX_RETRIES = 3
-    
-    # Retry delays (in seconds)
-    RETRY_DELAYS = [60, 300, 900]  # 1 min, 5 min, 15 min
-    
-    # Request timeout
+    RETRY_DELAYS = [60, 300, 900]
     REQUEST_TIMEOUT = 10
     
     @staticmethod
     def trigger_event(event_type: str, payload: dict):
-        """
-        Trigger a webhook event for all registered webhooks.
-        """
-        # Get all active webhooks
+        """Trigger a webhook event for all registered webhooks."""
         all_webhooks = Webhook.objects.filter(is_active=True)
-        
-        # Filter in Python (compatible with SQLite)
         matching_webhooks = [
             webhook for webhook in all_webhooks
             if event_type in webhook.subscribed_events
@@ -46,7 +40,6 @@ class WebhookService:
                 status='pending'
             )
             
-            # ✅ FOR DEVELOPMENT: Call synchronously instead of .delay()
             try:
                 WebhookService.deliver_event(event, retry_attempt=0)
             except Exception as e:
@@ -54,18 +47,11 @@ class WebhookService:
     
     @staticmethod
     def deliver_event(event: WebhookEvent, retry_attempt: int = 0):
-        """
-        Attempt to deliver a webhook event to external URL.
-        
-        Args:
-            event: WebhookEvent instance
-            retry_attempt: Current retry attempt number
-        """
+        """Attempt to deliver a webhook event to external URL."""
         import time
         
         webhook = event.webhook
         
-        # Add webhook signature to payload for verification
         payload = {
             **event.payload,
             '_webhook_id': webhook.id,
@@ -73,7 +59,6 @@ class WebhookService:
             '_timestamp': timezone.now().isoformat(),
         }
         
-        # Generate signature
         signature = WebhookService.generate_signature(webhook, payload)
         
         headers = {
@@ -86,7 +71,6 @@ class WebhookService:
         try:
             start_time = time.time()
             
-            # Make HTTP request
             response = requests.post(
                 webhook.url,
                 json=payload,
@@ -96,15 +80,13 @@ class WebhookService:
             
             duration_ms = int((time.time() - start_time) * 1000)
             
-            # Log delivery attempt
             delivery_log = WebhookDeliveryLog.objects.create(
                 event=event,
                 status_code=response.status_code,
-                response_body=response.text[:1000],  # Truncate to 1000 chars
+                response_body=response.text[:1000],
                 duration_ms=duration_ms
             )
             
-            # Check if successful (2xx status code)
             if 200 <= response.status_code < 300:
                 event.status = 'delivered'
                 event.delivered_at = timezone.now()
@@ -125,18 +107,15 @@ class WebhookService:
         
         logger.warning(f"❌ Webhook delivery failed: {error_msg}")
         
-        # Handle retry
         event.last_error = error_msg
         event.attempt_count = retry_attempt + 1
         
         if retry_attempt < WebhookService.MAX_RETRIES:
-            # Schedule retry
             retry_delay = WebhookService.RETRY_DELAYS[retry_attempt]
             event.status = 'retrying'
             event.next_retry_at = timezone.now() + timedelta(seconds=retry_delay)
             event.save()
             
-            # Schedule async retry
             retry_webhook_event.apply_async(
                 args=[event.id, retry_attempt + 1],
                 countdown=retry_delay
@@ -144,7 +123,6 @@ class WebhookService:
             
             logger.info(f"⏳ Retrying webhook {webhook.id} in {retry_delay}s")
         else:
-            # All retries exhausted
             event.status = 'failed'
             event.save()
             
@@ -153,16 +131,7 @@ class WebhookService:
     
     @staticmethod
     def generate_signature(webhook, payload: dict) -> str:
-        """
-        Generate HMAC-SHA256 signature for webhook payload.
-        
-        Args:
-            webhook: Webhook instance
-            payload: dict, event payload
-            
-        Returns:
-            str: Hexadecimal signature
-        """
+        """Generate HMAC-SHA256 signature for webhook payload."""
         import hmac
         import hashlib
         
@@ -176,13 +145,7 @@ class WebhookService:
     
     @staticmethod
     def increment_delivery_attempt(webhook, success: bool):
-        """
-        Track delivery statistics.
-        
-        Args:
-            webhook: Webhook instance
-            success: bool, whether delivery was successful
-        """
+        """Track delivery statistics."""
         webhook.total_deliveries += 1
         if success:
             webhook.successful_deliveries += 1
@@ -197,7 +160,6 @@ class WebhookService:
         ])
 
 
-# Celery tasks for async webhook delivery
 @shared_task
 def deliver_webhook_event(event_id: int):
     """Celery task to deliver webhook event."""
