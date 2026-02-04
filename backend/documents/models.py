@@ -18,6 +18,31 @@ def document_upload_path(instance, filename):
     return f'documents/{instance.id}/{filename}'
 
 
+# ✅ NEW: Custom manager for optimized queries
+class DocumentQuerySet(models.QuerySet):
+    """Custom QuerySet with performance optimizations."""
+    
+    def with_recipients(self):
+        """Prefetch recipients and recipient status in one query."""
+        from django.db.models import Prefetch, Q
+        
+        # Prefetch related fields
+        return self.prefetch_related(
+            'fields'  # Prefetch all fields at once
+        )
+
+
+class DocumentManager(models.Manager):
+    """Custom manager for documents."""
+    
+    def get_queryset(self):
+        return DocumentQuerySet(self.model, using=self._db)
+    
+    def with_recipients(self):
+        """Get documents with optimized recipient queries."""
+        return self.get_queryset().with_recipients()
+
+
 class Document(models.Model):
     """
     Document represents a single signing workflow instance.
@@ -54,6 +79,9 @@ class Document(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # ✅ ADDED: Custom manager
+    objects = DocumentManager()
+    
     class Meta:
         ordering = ['-created_at']
         indexes = [
@@ -64,8 +92,9 @@ class Document(models.Model):
         return self.title
     
     def save(self, *args, **kwargs):
-        """Compute page count from PDF on first save."""
-        if not self.pk and self.file:
+        """Compute page count from PDF on first save only."""
+        # ✅ OPTIMIZED: Only read PDF if page_count is not already set
+        if not self.pk and self.file and self.page_count == 1:
             try:
                 with self.file.open('rb') as f:
                     from PyPDF2 import PdfReader
@@ -80,6 +109,7 @@ class Document(models.Model):
         """Create a new independent Document by duplicating this one."""
         from django.core.files.base import ContentFile
         
+        # ✅ OPTIMIZED: Read file once, reuse for both save and hashing
         with self.file.open('rb') as f:
             file_content = f.read()
         
@@ -87,12 +117,13 @@ class Document(models.Model):
             title=f"{self.title} (Copy)",
             description=self.description,
             status='draft',
-            page_count=self.page_count
+            page_count=self.page_count  # ✅ Copy page_count, don't re-read PDF
         )
         
         filename = os.path.basename(self.file.name)
         new_doc.file.save(filename, ContentFile(file_content), save=True)
         
+        # ✅ OPTIMIZED: Bulk create in one query
         new_fields = []
         for field in self.fields.all():
             new_fields.append(

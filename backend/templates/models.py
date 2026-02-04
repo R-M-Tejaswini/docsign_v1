@@ -2,7 +2,7 @@
 backend/templates/models.py
 
 
-Reusable document templates and their field definitions.
+✅ OPTIMIZED: Only read PDF once on creation
 """
 
 import os
@@ -49,36 +49,41 @@ class Template(models.Model):
         ))
     
     def save(self, *args, **kwargs):
-        """Persist template and compute page count."""
-        if (not self.pk or self.page_count == 1) and self.file:
+        """✅ OPTIMIZED: Only read PDF on initial creation."""
+        # ✅ Only compute page_count if this is a new instance
+        if not self.pk and self.file:
             try:
-                from PyPDF2 import PdfReader
-                self.file.open('rb')
-                pdf = PdfReader(self.file)
-                self.page_count = len(pdf.pages)
-                self.file.seek(0)
+                with self.file.open('rb') as f:
+                    from PyPDF2 import PdfReader
+                    reader = PdfReader(f)
+                    self.page_count = len(reader.pages)
             except Exception as e:
                 print(f"Error reading PDF: {e}")
                 self.page_count = 1
-                try:
-                    if self.file:
-                        self.file.seek(0)
-                except:
-                    pass
         
         is_new = self.pk is None
         super().save(*args, **kwargs)
         
+        # ✅ Only move temp file on initial creation
         if is_new and self.file:
             old_file_name = self.file.name
             if 'templates/temp' in old_file_name:
-                self.file.open('rb')
-                self.file.save(os.path.basename(old_file_name), self.file, save=False)
-                super().save(update_fields=['file'])
                 try:
-                    self.file.storage.delete(old_file_name)
+                    with self.file.open('rb') as f:
+                        file_content = f.read()
+                    
+                    from django.core.files.base import ContentFile
+                    new_filename = os.path.basename(old_file_name)
+                    self.file.save(new_filename, ContentFile(file_content), save=False)
+                    
+                    super().save(update_fields=['file'])
+                    
+                    try:
+                        self.file.storage.delete(old_file_name)
+                    except Exception as e:
+                        print(f"Warning: Failed to delete temp file {old_file_name}: {e}")
                 except Exception as e:
-                    print(f"Warning: Failed to delete temp file {old_file_name}: {e}")
+                    print(f"Warning: Failed to move template file: {e}")
 
 
 class TemplateField(BaseField):

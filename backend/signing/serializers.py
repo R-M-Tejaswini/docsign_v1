@@ -76,7 +76,14 @@ class SigningTokenSerializer(serializers.ModelSerializer):
         return f'{base_url}/sign/{obj.token}'
     
     def get_recipient_status(self, obj):
+        """✅ OPTIMIZED: Use cached status from context."""
         if obj.scope == 'sign' and obj.recipient:
+            # ✅ Check cache first
+            context_cache = self.context.get('_recipient_status_cache', {})
+            if obj.document.id in context_cache:
+                return context_cache[obj.document.id].get(obj.recipient, None)
+            
+            # ✅ Fallback: compute once
             from documents.services import get_document_service
             service = get_document_service()
             status = service.get_recipient_status(obj.document)

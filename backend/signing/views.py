@@ -44,14 +44,24 @@ class SigningTokenViewSet(viewsets.ViewSet):
     pagination_class = StandardResultsSetPagination
     
     def list(self, request, pk=None):
-        """List all signing tokens for a given document."""
+        """✅ OPTIMIZED: Pre-compute recipient status for all tokens at once."""
         document = get_object_or_404(Document, id=pk)
         tokens = SigningToken.objects.filter(
             document=document
         ).select_related('document').prefetch_related('signature_events')
         
+        # ✅ Compute status once for the document
+        from documents.services import get_document_service
+        service = get_document_service()
+        recipient_status = service.get_recipient_status(document)
+        
         serializer = SigningTokenSerializer(
-            tokens, many=True, context={'request': request}
+            tokens,
+            many=True,
+            context={
+                'request': request,
+                '_recipient_status_cache': {document.id: recipient_status}
+            }
         )
         return Response(serializer.data)
     
@@ -115,6 +125,7 @@ class PublicSignViewSet(viewsets.ViewSet):
     def get_sign_page(self, request, token=None):
         """Retrieve signing page data for the provided token."""
         try:
+            # ✅ OPTIMIZED: Use consistent prefetch policy
             signing_token = SigningToken.objects.select_related(
                 'document'
             ).prefetch_related(
@@ -150,20 +161,21 @@ class PublicSignViewSet(viewsets.ViewSet):
             
             if signing_token.scope == 'sign' and not signing_token.used:
                 is_editable = True
+                # ✅ Fields already prefetched
                 editable_field_ids = list(
-                    document.fields.filter(
-                        recipient=signing_token.recipient,
-                        locked=False
-                    ).values_list('id', flat=True)
+                    [f.id for f in document.fields.all()
+                     if f.recipient == signing_token.recipient and not f.locked]
                 )
             
             from documents.serializers import DocumentFieldSerializer, DocumentSerializer
-            fields = document.fields.all()
-            fields_data = DocumentFieldSerializer(fields, many=True).data
+            fields_data = DocumentFieldSerializer(document.fields.all(), many=True).data
             
             signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
                         document.signatures.all()
             signatures_data = SignatureEventSerializer(signatures, many=True).data
+            
+            # ✅ Compute status once
+            recipient_status = doc_service.get_recipient_status(document) if signing_token.recipient else None
             
             return Response({
                 'token': token,
@@ -171,11 +183,17 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'recipient': signing_token.recipient,
                 'is_editable': is_editable,
                 'editable_field_ids': editable_field_ids,
-                'document': DocumentSerializer(document).data,
+                'document': DocumentSerializer(
+                    document,
+                    context={
+                        'request': request,
+                        '_recipient_status_cache': {document.id: recipient_status} if recipient_status else {}
+                    }
+                ).data,
                 'fields': fields_data,
                 'signatures': signatures_data,
                 'expires_at': signing_token.expires_at,
-                'recipient_status': doc_service.get_recipient_status(document) if signing_token.recipient else None
+                'recipient_status': recipient_status
             })
         except Exception as e:
             return Response(
@@ -187,7 +205,12 @@ class PublicSignViewSet(viewsets.ViewSet):
     def submit_signature(self, request, token=None):
         """Submit signature data for a recipient using a sign token."""
         try:
-            signing_token = SigningToken.objects.select_related('document').get(token=token)
+            # ✅ OPTIMIZED: Consistent prefetch
+            signing_token = SigningToken.objects.select_related(
+                'document'
+            ).prefetch_related(
+                'document__fields'
+            ).get(token=token)
         except SigningToken.DoesNotExist:
             return Response(
                 {'error': 'Invalid token'},

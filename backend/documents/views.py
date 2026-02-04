@@ -36,9 +36,12 @@ from django.shortcuts import get_object_or_404
 # ----------------------------
 from .models import Document, DocumentField  # ← ONLY these
 from .serializers import (
-    DocumentListSerializer, DocumentDetailSerializer,
-    DocumentCreateSerializer, DocumentFieldSerializer, 
-    DocumentFieldUpdateSerializer
+    DocumentListSerializer,
+    DocumentDetailSerializer,
+    DocumentCreateSerializer,
+    DocumentFieldSerializer, 
+    DocumentFieldUpdateSerializer,
+    DocumentMinimalListSerializer  # ✅ ADDED: Import minimal serializer
 )
 from .services import get_document_service
 
@@ -83,6 +86,9 @@ class DocumentViewSet(viewsets.ModelViewSet):
             return DocumentFieldUpdateSerializer
         elif self.action in ['create_field']:
             return DocumentFieldSerializer
+        elif self.action == 'list':
+            # ✅ OPTIMIZED: Use minimal serializer for lists
+            return DocumentMinimalListSerializer
         else:
             return DocumentListSerializer
     
@@ -277,3 +283,38 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    def list(self, request, *args, **kwargs):
+        """✅ OPTIMIZED: List without expensive computed fields."""
+        queryset = self.filter_queryset(self.get_queryset())
+        
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            documents = page
+        else:
+            documents = queryset
+        
+        serializer = self.get_serializer(documents, many=True)
+        
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        
+        return Response(serializer.data)
+    
+    def retrieve(self, request, *args, **kwargs):
+        """✅ OPTIMIZED: Pre-compute recipient status for single document."""
+        instance = self.get_object()
+        
+        # ✅ Compute status once
+        from documents.services import get_document_service
+        service = get_document_service()
+        recipient_status = service.get_recipient_status(instance)
+        
+        serializer = self.get_serializer(
+            instance,
+            context={
+                'request': request,
+                '_recipient_status_cache': {instance.id: recipient_status}
+            }
+        )
+        return Response(serializer.data)

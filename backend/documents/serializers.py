@@ -2,7 +2,7 @@
 backend/documents/serializers.py
 
 
-Document and field serializers.
+✅ OPTIMIZED: Cache recipients and status per request
 """
 
 from rest_framework import serializers
@@ -64,52 +64,66 @@ class DocumentSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
+        # ✅ OPTIMIZED: Use cached recipient status from context
+        context_cache = self.context.get('_recipient_status_cache', {})
+        if obj.id in context_cache:
+            return sorted(list(context_cache[obj.id].keys()))
+        
         from documents.services import get_document_service
         service = get_document_service()
-        return service.get_recipients(obj)
+        recipients = service.get_recipients(obj)
+        return recipients
     
     def get_recipient_status(self, obj):
+        # ✅ OPTIMIZED: Use cached status from context
+        context_cache = self.context.get('_recipient_status_cache', {})
+        if obj.id in context_cache:
+            return context_cache[obj.id]
+        
         from documents.services import get_document_service
         service = get_document_service()
-        return service.get_recipient_status(obj)
+        status = service.get_recipient_status(obj)
+        return status
 
 
-class DocumentListSerializer(serializers.ModelSerializer):
-    """Serializer for document lists."""
-    file_url = serializers.SerializerMethodField()
-    recipients = serializers.SerializerMethodField()
-    recipient_status = serializers.SerializerMethodField()
+# Add these new serializers
+
+# ✅ NEW: Minimal list serializers without expensive SerializerMethodFields
+class DocumentMinimalListSerializer(serializers.ModelSerializer):
+    """Minimal serializer for document lists - no nested data or computed fields."""
     
     class Meta:
         model = Document
         fields = [
             'id', 'title', 'description', 'status', 'page_count',
-            'created_at', 'updated_at', 'file_url', 'recipients', 'recipient_status'
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = fields
+
+
+class DocumentListSerializer(serializers.ModelSerializer):
+    """Serializer for document lists with basic computed fields."""
+    file_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Document
+        fields = [
+            'id', 'title', 'description', 'status', 'page_count',
+            'created_at', 'updated_at', 'file_url'
         ]
         read_only_fields = fields
     
     def get_file_url(self, obj):
+        # ✅ Keep simple field URLs only
         if obj.file:
             request = self.context.get('request')
             if request:
                 return request.build_absolute_uri(obj.file.url)
             return obj.file.url
         return None
-    
-    def get_recipients(self, obj):
-        # ✅ FIXED: Use database query that properly deduplicates
-        return sorted(list(
-            obj.fields.values_list('recipient', flat=True)
-            .filter(recipient__isnull=False)
-            .distinct()
-        ))
-    
-    def get_recipient_status(self, obj):
-        from documents.services import get_document_service
-        service = get_document_service()
-        return service.get_recipient_status(obj)
 
 
+# Keep DocumentDetailSerializer with full data
 class DocumentDetailSerializer(serializers.ModelSerializer):
     """Detailed view for single document."""
     file_url = serializers.SerializerMethodField()
@@ -144,11 +158,21 @@ class DocumentDetailSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
+        # ✅ OPTIMIZED: Use cached recipient status from context
+        context_cache = self.context.get('_recipient_status_cache', {})
+        if obj.id in context_cache:
+            return sorted(list(context_cache[obj.id].keys()))
+        
         from documents.services import get_document_service
         service = get_document_service()
         return service.get_recipients(obj)
     
     def get_recipient_status(self, obj):
+        # ✅ OPTIMIZED: Use cached status from context
+        context_cache = self.context.get('_recipient_status_cache', {})
+        if obj.id in context_cache:
+            return context_cache[obj.id]
+        
         from documents.services import get_document_service
         service = get_document_service()
         return service.get_recipient_status(obj)
