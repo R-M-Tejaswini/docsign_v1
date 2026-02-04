@@ -82,6 +82,34 @@ class SigningProcessService:
             })
     
     @staticmethod
+    def update_field_values(recipient_fields, field_values):
+        """
+        ✅ CONSOLIDATED: Update field values and lock them.
+        
+        Args:
+            recipient_fields: QuerySet of DocumentField objects to update
+            field_values: List of {'field_id': ..., 'value': ...} dicts
+        
+        Returns:
+            List of updated field objects
+        """
+        fields_to_update = []
+        fields_map = {f.id: f for f in recipient_fields}
+        
+        for fv in field_values:
+            field = fields_map.get(int(fv['field_id']))
+            if field:
+                field.value = fv['value']
+                field.locked = True
+                fields_to_update.append(field)
+        
+        # Bulk update fields
+        if fields_to_update:
+            DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
+        
+        return fields_to_update
+    
+    @staticmethod
     def process_signature_submission(
         signing_token,
         signer_name,
@@ -116,20 +144,8 @@ class SigningProcessService:
             sig_service = SignatureService()
             token_service = SigningTokenService()
             
-            # Update fields with values and lock them
-            fields_to_update = []
-            fields_map = {f.id: f for f in recipient_fields}
-            
-            for fv in field_values:
-                field = fields_map.get(int(fv['field_id']))
-                if field:
-                    field.value = fv['value']
-                    field.locked = True
-                    fields_to_update.append(field)
-            
-            # Bulk update fields
-            if fields_to_update:
-                DocumentField.objects.bulk_update(fields_to_update, ['value', 'locked'])
+            # ✅ CONSOLIDATED: Use utility function
+            SigningProcessService.update_field_values(recipient_fields, field_values)
             
             # Compute document hash at signing time
             document_sha256 = doc_service.compute_sha256(document)

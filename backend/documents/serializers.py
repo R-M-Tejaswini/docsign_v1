@@ -97,7 +97,12 @@ class DocumentListSerializer(serializers.ModelSerializer):
         return None
     
     def get_recipients(self, obj):
-        return list(obj.fields.values_list('recipient', flat=True).distinct())
+        # ✅ FIXED: Use database query that properly deduplicates
+        return sorted(list(
+            obj.fields.values_list('recipient', flat=True)
+            .filter(recipient__isnull=False)
+            .distinct()
+        ))
     
     def get_recipient_status(self, obj):
         from documents.services import get_document_service

@@ -23,7 +23,8 @@ class SigningToken(models.Model):
     document = models.ForeignKey(
         Document,
         on_delete=models.CASCADE,
-        related_name='tokens'
+        related_name='tokens',
+        db_index=True
     )
     scope = models.CharField(max_length=10, choices=SCOPE_CHOICES)
     recipient = models.CharField(
@@ -53,9 +54,26 @@ class SigningToken(models.Model):
         return f"Token {self.token[:8]}... ({self.scope}{recipient_info})"
     
     def clean(self):
-        """Validate sign tokens have recipients."""
+        """Validate sign tokens have recipients and expiry is in the future."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from django.utils import timezone
+        
+        errors = {}
+        
         if self.scope == 'sign' and not self.recipient:
-            raise ValidationError({'recipient': 'Sign tokens must specify a recipient'})
+            errors['recipient'] = 'Sign tokens must specify a recipient'
+        
+        # ✅ ADDED: Validate expiry is in future
+        if self.expires_at and self.expires_at <= timezone.now():
+            errors['expires_at'] = 'Expiry date must be in the future'
+        
+        if errors:
+            raise DjangoValidationError(errors)
+    
+    def save(self, *args, **kwargs):
+        """Run full_clean before save."""
+        self.full_clean()
+        super().save(*args, **kwargs)
 
 
 class SignatureEvent(models.Model):

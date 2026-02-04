@@ -134,7 +134,8 @@ class DocumentField(BaseField):
     document = models.ForeignKey(
         Document,
         on_delete=models.CASCADE,
-        related_name='fields'
+        related_name='fields',
+        db_index=True
     )
     
     value = models.TextField(blank=True, null=True)
@@ -147,6 +148,23 @@ class DocumentField(BaseField):
     
     class Meta:
         ordering = ['page_number', 'y_pct', 'x_pct']
+        indexes = [
+            models.Index(fields=['document', 'recipient']),
+        ]
     
     def __str__(self):
         return f"{self.label} ({self.recipient})"
+    
+    def clean(self):
+        """Validate page_number is within document bounds."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        
+        if self.document and self.page_number > self.document.page_count:
+            raise DjangoValidationError({
+                'page_number': f'Page number {self.page_number} exceeds document page count ({self.document.page_count})'
+            })
+    
+    def save(self, *args, **kwargs):
+        """Run full_clean before save."""
+        self.full_clean()
+        super().save(*args, **kwargs)

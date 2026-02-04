@@ -72,7 +72,8 @@ class WebhookEvent(models.Model):
     webhook = models.ForeignKey(
         Webhook,
         on_delete=models.CASCADE,
-        related_name='webhook_events'
+        related_name='webhook_events',
+        db_index=True  # ✅ ADDED: Index for webhook lookups
     )
     event_type = models.CharField(
         max_length=50,
@@ -85,7 +86,8 @@ class WebhookEvent(models.Model):
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
-        default='pending'
+        default='pending',
+        db_index=True  # ✅ ADDED: Index for status filtering
     )
     attempt_count = models.PositiveIntegerField(default=0)
     last_error = models.TextField(blank=True)
@@ -97,7 +99,7 @@ class WebhookEvent(models.Model):
     class Meta:
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['webhook', 'status', 'created_at']),
+            models.Index(fields=['webhook', 'status', 'created_at']),  # ✅ UPDATED: Composite
             models.Index(fields=['event_type', 'created_at']),
         ]
     

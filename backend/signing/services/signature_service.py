@@ -1,6 +1,5 @@
 """
 Signature event business logic service layer.
-
 """
 
 from core.services import HashingService
@@ -12,6 +11,7 @@ class SignatureService:
     @staticmethod
     def compute_event_hash(signature_event):
         """Compute tamper-evident hash for a signature event."""
+        # ✅ DELEGATED: Call canonical implementation from core
         return HashingService.compute_event_hash(signature_event)
     
     @staticmethod

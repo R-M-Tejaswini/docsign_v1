@@ -5,7 +5,7 @@ Signing token business logic service layer.
 
 import secrets
 from django.core.exceptions import ValidationError
-from .token_utils import calculate_expiry, is_token_expired
+from django.utils import timezone
 
 
 class SigningTokenService:
@@ -44,7 +44,7 @@ class SigningTokenService:
                 raise ValidationError(error)
         
         token_str = secrets.token_urlsafe(32)
-        expires_at = calculate_expiry(expires_in_days)
+        expires_at = SigningTokenService.calculate_expiry(expires_in_days)
         
         return SigningToken.objects.create(
             token=token_str,
@@ -55,12 +55,27 @@ class SigningTokenService:
         )
     
     @staticmethod
+    def calculate_expiry(days=None):
+        """Calculate expiry datetime from days offset."""
+        if days is None or days <= 0:
+            return None
+        from datetime import timedelta
+        return timezone.now() + timedelta(days=days)
+    
+    @staticmethod
+    def is_token_expired(expires_at):
+        """Check if a token has expired."""
+        if expires_at is None:
+            return False
+        return timezone.now() > expires_at
+    
+    @staticmethod
     def is_token_valid(token):
-        """Check if token is valid for use."""
+        """Check if token is valid for use. ✅ CONSOLIDATED: All validation in one place."""
         if token.revoked:
             return False, "This link has been revoked"
         
-        if is_token_expired(token.expires_at):
+        if SigningTokenService.is_token_expired(token.expires_at):
             return False, "This link has expired"
         
         if token.scope == 'sign' and token.used:
