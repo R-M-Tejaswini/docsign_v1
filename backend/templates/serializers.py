@@ -1,6 +1,7 @@
 """
 backend/templates/serializers.py
 
+
 Purpose:
 - Define serializers for Template and TemplateField models.
 - These serializers control how template data is validated, created,

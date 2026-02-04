@@ -1,6 +1,7 @@
 """
 backend/templates/views.py
 
+
 Purpose:
 - Defines API endpoints for managing document templates.
 - Templates act as reusable blueprints containing a base PDF and predefined fields

@@ -54,7 +54,6 @@ export const documentAPI = {
     if (formData.description) data.append('description', formData.description)
     if (formData.template_id) data.append('template_id', formData.template_id)
     if (formData.file) data.append('file', formData.file)
-    
     return api.post('/documents/', data, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })

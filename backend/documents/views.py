@@ -1,6 +1,7 @@
 """
 backend/documents/views.py
 
+
 ✅ CLEAN: Document CRUD endpoints ONLY.
 """
 
@@ -160,7 +161,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 can_generate, error = doc_service.can_generate_sign_link(document, recipient)
                 available.append({
                     'recipient': recipient,
-                    'can_generate_link': can_generate,
+                    'can_generate_sign_link': can_generate,
                     'status': recipient_status.get(recipient, {}),
                     'error': error
                 })

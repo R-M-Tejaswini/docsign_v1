@@ -1,5 +1,6 @@
 """
 Signature event business logic service layer.
+
 """
 
 from core.services import HashingService

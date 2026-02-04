@@ -1,5 +1,6 @@
 """
 Signing process service layer.
+
 """
 
 from django.db import transaction

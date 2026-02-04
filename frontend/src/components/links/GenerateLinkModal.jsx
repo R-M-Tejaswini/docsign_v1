@@ -41,6 +41,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {
       const data = await getRecipients()
       setAvailableRecipients(data.recipients || [])
       
+      // ✅ Match backend field name
       const available = data.recipients?.find(r => r.can_generate_sign_link)
       if (available && linkType === 'sign') {
         setSelectedRecipient(available.recipient)
@@ -90,7 +91,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {
     if (type === 'view') {
       setSelectedRecipient('')
     } else {
-      const available = availableRecipients.find(r => r.can_generate_sign_link)
+      const available = availableRecipients.find(r => r.can_generate_sign_link)  // ← Updated field name
       if (available) {
         setSelectedRecipient(available.recipient)
       }
@@ -98,7 +99,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {
   }
 
   const allRecipients = availableRecipients.map(r => r.recipient)
-  const canGenerateSignLinks = availableRecipients.some(r => r.can_generate_sign_link)
+  const canGenerateSignLinks = availableRecipients.some(r => r.can_generate_sign_link)  // ← Updated field name
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Generate Signing Link" size="md">
@@ -182,7 +183,7 @@ export const GenerateLinkModal = ({ isOpen, onClose, document, onSuccess }) => {
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto border-2 border-gray-200 rounded-lg p-2">
                 {availableRecipients.map((recipientInfo, idx) => {
-                  const isAvailable = recipientInfo.can_generate_sign_link
+                  const isAvailable = recipientInfo.can_generate_sign_link  // ← Updated field name
                   const isSelected = selectedRecipient === recipientInfo.recipient
                   
                   return (

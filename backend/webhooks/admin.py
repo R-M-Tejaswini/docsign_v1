@@ -2,6 +2,7 @@ from django.contrib import admin
 from .models import Webhook, WebhookEvent, WebhookDeliveryLog
 
 
+
 @admin.register(Webhook)
 class WebhookAdmin(admin.ModelAdmin):
     list_display = ('url', 'is_active', 'total_deliveries', 'successful_deliveries', 'failed_deliveries', 'created_at')

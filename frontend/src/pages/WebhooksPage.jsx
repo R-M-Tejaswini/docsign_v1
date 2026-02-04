@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Button } from '../components/ui/Button'
 import { Modal } from '../components/ui/Modal'
 import { useApi } from '../hooks/useApi'
-import { documentAPI } from '../services/api'
+import { webhookAPI } from '../services/api' // ← Import webhookAPI directly
 import { Toast } from '../components/ui/Toast'
 
 export const WebhooksPage = () => {
@@ -16,10 +16,10 @@ export const WebhooksPage = () => {
     subscribed_events: []
   })
 
-  const { execute: listWebhooks } = useApi(() => documentAPI.webhooks.list())
-  const { execute: createWebhook } = useApi((data) => documentAPI.webhooks.create(data))
-  const { execute: testWebhook } = useApi((id) => documentAPI.webhooks.test(id))
-  const { execute: deleteWebhook } = useApi((id) => documentAPI.webhooks.delete(id))
+  const { execute: listWebhooks } = useApi(() => webhookAPI.list()) // ← Changed from documentAPI.webhooks
+  const { execute: createWebhook } = useApi((data) => webhookAPI.create(data)) // ← Changed
+  const { execute: testWebhook } = useApi((id) => webhookAPI.test(id)) // ← Changed
+  const { execute: deleteWebhook } = useApi((id) => webhookAPI.delete(id)) // ← Changed
 
   useEffect(() => {
     loadWebhooks()

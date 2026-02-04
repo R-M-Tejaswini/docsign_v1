@@ -3,6 +3,7 @@ from pathlib import Path
 from io import BytesIO
 from datetime import datetime
 
+
 from django.conf import settings
 from django.core.files.base import ContentFile
 from PyPDF2 import PdfReader, PdfWriter

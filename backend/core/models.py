@@ -1,6 +1,7 @@
 """
 core/models.py
 
+
 Shared abstract models and base classes used across the application.
 """
 

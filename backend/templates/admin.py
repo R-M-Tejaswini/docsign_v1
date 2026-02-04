@@ -2,6 +2,7 @@ from django.contrib import admin
 from .models import Template, TemplateField
 
 
+
 @admin.register(Template)
 class TemplateAdmin(admin.ModelAdmin):
     list_display = ('title', 'page_count', 'created_at')

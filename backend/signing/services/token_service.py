@@ -1,5 +1,6 @@
 """
 Signing token business logic service layer.
+
 """
 
 import secrets
