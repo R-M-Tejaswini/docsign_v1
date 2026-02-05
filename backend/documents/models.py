@@ -1,9 +1,7 @@
 """
 backend/documents/models.py
 
-
-✅ CLEAN: Document lifecycle and field management ONLY.
-No signing tokens, signatures, or webhooks here!
+✅ FIXED: Store files in temp/ initially, move to proper location after ID
 """
 
 import os
@@ -13,9 +11,19 @@ from core.models import BaseField
 
 
 def document_upload_path(instance, filename):
-    """Generate upload path for document files."""
-    ext = os.path.splitext(filename)[1]
-    return f'documents/{instance.id}/{filename}'
+    """
+    ✅ FIXED: Generate proper upload path based on whether document has ID yet
+    
+    - NEW documents (no ID): documents/temp/{filename}
+    - SAVED documents (has ID): documents/{id}/{filename}
+    """
+    if instance.pk:
+        # ✅ Document has been saved, use proper ID-based path
+        ext = os.path.splitext(filename)[1]
+        return f'documents/{instance.pk}/{filename}'
+    else:
+        # ✅ Document hasn't been saved yet, use temp folder
+        return f'documents/temp/{filename}'
 
 
 # ✅ NEW: Custom manager for optimized queries
@@ -92,18 +100,63 @@ class Document(models.Model):
         return self.title
     
     def save(self, *args, **kwargs):
-        """Compute page count from PDF on first save only."""
-        # ✅ OPTIMIZED: Only read PDF if page_count is not already set
-        if not self.pk and self.file and self.page_count == 1:
+        """
+        ✅ FIXED: Handle file migration from temp/ to proper location
+        """
+        is_new = not self.pk
+        
+        # ✅ Step 1: Compute page count from PDF on first save only
+        if is_new and self.file and self.page_count == 1:
             try:
                 with self.file.open('rb') as f:
                     from PyPDF2 import PdfReader
                     reader = PdfReader(f)
                     self.page_count = len(reader.pages)
             except Exception as e:
-                print(f"Error reading PDF: {e}")
+                print(f"⚠️ Error reading PDF page count: {e}")
                 self.page_count = 1
+        
+        # ✅ Step 2: Save to database (this creates the ID)
         super().save(*args, **kwargs)
+        
+        # ✅ Step 3: Move file from temp/ to proper location if needed
+        if is_new and self.file:
+            current_path = self.file.name
+            
+            # Check if file is in temp directory
+            if 'documents/temp/' in current_path:
+                print(f"📁 Moving file from temp: {current_path}")
+                
+                # Extract filename without path
+                filename = os.path.basename(current_path)
+                
+                # Create new path using the now-assigned ID
+                new_path = f'documents/{self.pk}/{filename}'
+                
+                try:
+                    # Read current file
+                    with self.file.open('rb') as f:
+                        file_content = f.read()
+                    
+                    # Delete old file from storage
+                    if self.file.storage.exists(current_path):
+                        self.file.storage.delete(current_path)
+                    
+                    # Save to new location
+                    from django.core.files.base import ContentFile
+                    self.file.save(
+                        filename,
+                        ContentFile(file_content),
+                        save=False  # Don't trigger save() again
+                    )
+                    
+                    # Update database with new path
+                    Document.objects.filter(pk=self.pk).update(file=self.file.name)
+                    
+                    print(f"✅ File moved to: {self.file.name}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Error moving file: {e}")
     
     def duplicate(self):
         """Create a new independent Document by duplicating this one."""

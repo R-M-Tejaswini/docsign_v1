@@ -1,22 +1,14 @@
 """
 backend/templates/views.py
 
-
-Purpose:
-- Defines API endpoints for managing document templates.
-- Templates act as reusable blueprints containing a base PDF and predefined fields
-  that can later be copied into Document versions.
-
-Design principles:
-- Uses a ModelViewSet for consistency with other modules.
-- Explicitly controls parsers and serializers based on action to support
-  file uploads and JSON-based field management.
+Template CRUD endpoints.
 """
 
 # ----------------------------
 # Django imports
 # ----------------------------
 from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 # ----------------------------
 # DRF imports
@@ -39,54 +31,24 @@ from .serializers import (
 
 
 class TemplateViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet for Template CRUD operations.
-
-    What:
-    - Handles creation, retrieval, update, deletion of templates.
-    - Manages template fields and recipient introspection via custom actions.
-
-    Why:
-    - Centralizes all template-related behavior in one place, mirroring
-      the structure used for documents and ensuring predictable API behavior.
-    """
-    # Optimization: prefetch fields to avoid N+1 queries when listing/retrieving templates
+    """ViewSet for Template CRUD operations."""
     queryset = Template.objects.all().prefetch_related('fields')
     
     def get_parsers(self):
-        """
-        Dynamically select request parsers based on endpoint behavior.
-
-        What:
-        - Uses multipart parsing when uploading template files.
-        - Uses JSON parsing when creating/updating template fields.
-        - Defaults to JSON for all other requests.
-
-        Why:
-        - Template creation often involves file uploads (PDFs).
-        - Template fields are pure metadata and should not require multipart encoding.
-        """
+        """✅ FIXED: Proper parser selection"""
         if self.request.method == 'POST':
-            # Check if this is a file upload (no nested path)
-            if not self.request.path.endswith('/fields/'):
-                self.parser_classes = (MultiPartParser, FormParser)
-            else:
+            if self.request.path.endswith('/fields/'):
+                # Field creation uses JSON
                 self.parser_classes = (JSONParser,)
+            else:
+                # Template creation uses multipart for file upload
+                self.parser_classes = (MultiPartParser, FormParser)
         else:
             self.parser_classes = (JSONParser,)
         return super().get_parsers()
     
     def get_serializer_class(self):
-        """
-        Select serializer based on the current action.
-
-        Why:
-        - Different serializers serve different concerns:
-          - Creation needs file handling and validation.
-          - Retrieval needs full nested representation.
-          - Listing needs a lightweight summary.
-          - Field actions need field-specific validation.
-        """
+        """✅ FIXED: Correct serializer selection"""
         if self.action == 'create':
             return TemplateCreateSerializer
         elif self.action == 'retrieve':
@@ -96,100 +58,103 @@ class TemplateViewSet(viewsets.ModelViewSet):
         else:
             return TemplateListSerializer
     
+    def create(self, request, *args, **kwargs):
+        """✅ FIXED: Proper multipart file handling"""
+        try:
+            # ✅ Validate and create with TemplateCreateSerializer
+            serializer = self.get_serializer(data=request.data)
+            
+            if not serializer.is_valid():
+                print(f"❌ Validation errors: {serializer.errors}")
+                return Response(
+                    serializer.errors,
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # ✅ Save immediately
+            with transaction.atomic():
+                template = serializer.save()
+            
+            print(f"✅ Template created: {template.id} - {template.title}")
+            
+            # Return full template data
+            output_serializer = TemplateSerializer(
+                template,
+                context={'request': request}
+            )
+            return Response(
+                output_serializer.data,
+                status=status.HTTP_201_CREATED
+            )
+        
+        except Exception as e:
+            import traceback
+            print(f"❌ Template creation error: {e}")
+            traceback.print_exc()
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    
     def retrieve(self, request, *args, **kwargs):
-        """
-        Retrieve a single template with all nested data.
-
-        What:
-        - Returns template metadata, file URL, and all associated fields.
-
-        Why:
-        - Used by template editors and preview screens where full template
-          structure must be visible.
-        """
+        """Retrieve a single template with all nested data."""
         instance = self.get_object()
         serializer = TemplateSerializer(instance, context={'request': request})
         return Response(serializer.data)
     
     def partial_update(self, request, *args, **kwargs):
-        """
-        Partially update template metadata.
-
-        What:
-        - Updates only editable template attributes such as title or description.
-
-        Why:
-        - Allows lightweight edits without affecting template fields or file data.
-        - Uses a simpler serializer for validation, then returns the full template
-          for client-side consistency.
-        """
+        """Partially update template metadata (title, description only)."""
         instance = self.get_object()
-
-        # Use TemplateListSerializer for validation and save
         serializer = TemplateListSerializer(instance, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         
-        # Refresh instance from DB to ensure updated values
         instance.refresh_from_db()
-        
-        # Return full template with nested fields
         output_serializer = TemplateSerializer(instance, context={'request': request})
         return Response(output_serializer.data)
     
     @action(detail=True, methods=['get'])
     def recipients(self, request, pk=None):
-        """
-        Return unique recipients defined in this template.
-
-        What:
-        - Aggregates recipients from all template fields.
-
-        Why:
-        - Allows UIs to preview who will be required to sign when this template
-          is used to create a document.
-        """
+        """Get list of unique recipients for this template."""
         template = self.get_object()
         recipients = template.get_recipients()
         return Response({'recipients': recipients})
     
     @action(detail=True, methods=['post'])
     def fields(self, request, pk=None):
-        """
-        Create a new field on a template.
-
-        What:
-        - Adds a field definition (position, type, recipient, etc.) to the template.
-
-        Why:
-        - Template fields define the default signing structure that will later
-          be copied into document versions.
-        """
+        """✅ FIXED: Create a new field on this template."""
         template = self.get_object()
-        serializer = TemplateFieldSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        field = serializer.save(template=template)
         
-        return Response(
-            TemplateFieldSerializer(field).data,
-            status=status.HTTP_201_CREATED
-        )
+        # ✅ FIXED: Don't manipulate data, let serializer handle it
+        data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        data['template'] = template.id
+        
+        serializer = TemplateFieldSerializer(data=data)
+        
+        if not serializer.is_valid():
+            print(f"❌ Field validation errors: {serializer.errors}")
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            field = serializer.save()
+            print(f"✅ Field created: {field.id} on template {template.id}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            import traceback
+            print(f"❌ Field creation error: {e}")
+            traceback.print_exc()
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
     
     @action(detail=True, methods=['patch', 'delete'], url_path='fields/(?P<field_id>[0-9]+)')
     def field_detail(self, request, pk=None, field_id=None):
-        """
-        Update or delete an existing template field.
-
-        PATCH:
-        - Updates position, label, recipient, or field properties.
-
-        DELETE:
-        - Removes the field from the template entirely.
-
-        Why:
-        - Enables iterative template design before templates are used
-          to create live documents.
-        """
+        """Update or delete a specific template field."""
         template = self.get_object()
         field = get_object_or_404(TemplateField, id=field_id, template=template)
         
@@ -199,25 +164,6 @@ class TemplateViewSet(viewsets.ModelViewSet):
             serializer.save()
             return Response(serializer.data)
         
-        # DELETE
-        field.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-    
-    def create(self, request, *args, **kwargs):
-        """
-        Create a new template.
-
-        What:
-        - Accepts a PDF file and metadata to initialize a reusable template.
-
-        Why:
-        - Templates are the foundation for consistent document generation,
-          reducing repeated manual setup for common document types.
-        """
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        instance = serializer.save()
-        
-        # Return full template representation including generated ID
-        output_serializer = TemplateSerializer(instance, context={'request': request})
-        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
+        elif request.method == 'DELETE':
+            field.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)

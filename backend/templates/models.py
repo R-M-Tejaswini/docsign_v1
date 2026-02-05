@@ -1,8 +1,7 @@
 """
 backend/templates/models.py
 
-
-✅ OPTIMIZED: Only read PDF once on creation
+✅ OPTIMIZED: Store in temp/ initially, migrate after ID assigned
 """
 
 import os
@@ -12,10 +11,17 @@ from core.models import BaseField
 
 
 def template_upload_path(instance, filename):
-    """Generate upload path for template files."""
+    """
+    ✅ FIXED: Generate upload path based on whether template has ID yet
+    
+    - NEW templates (no ID): templates/temp/{filename}
+    - SAVED templates (has ID): templates/{id}/{filename}
+    """
     if instance.pk:
+        # ✅ Template has been saved, use proper ID-based path
         return f'templates/{instance.pk}/{filename}'
     else:
+        # ✅ Template hasn't been saved yet, use temp folder
         return f'templates/temp/{filename}'
 
 
@@ -49,41 +55,117 @@ class Template(models.Model):
         ))
     
     def save(self, *args, **kwargs):
-        """✅ OPTIMIZED: Only read PDF on initial creation."""
-        # ✅ Only compute page_count if this is a new instance
-        if not self.pk and self.file:
+        """
+        ✅ FIXED: Handle file migration from temp/ to proper location
+        """
+        is_new = not self.pk
+        
+        # ✅ Step 1: Compute page count from PDF on first save only
+        if is_new and self.file:
             try:
-                with self.file.open('rb') as f:
-                    from PyPDF2 import PdfReader
-                    reader = PdfReader(f)
-                    self.page_count = len(reader.pages)
+                # ✅ Read file content WITHOUT closing the stream
+                file_content = self.file.read()
+                
+                # ✅ Reset file pointer so Django can read it again during save
+                if hasattr(self.file, 'seek'):
+                    self.file.seek(0)
+                
+                # ✅ Now count pages
+                from io import BytesIO
+                from PyPDF2 import PdfReader
+                
+                pdf_buffer = BytesIO(file_content)
+                reader = PdfReader(pdf_buffer)
+                self.page_count = len(reader.pages)
+                
+                print(f"📊 PDF page count: {self.page_count}")
+                
             except Exception as e:
-                print(f"Error reading PDF: {e}")
+                print(f"⚠️ Warning: Error reading PDF page count: {e}")
                 self.page_count = 1
         
-        is_new = self.pk is None
+        # ✅ Step 2: Save to database (this creates the ID)
         super().save(*args, **kwargs)
         
-        # ✅ Only move temp file on initial creation
+        # ✅ Step 3: Move file from temp/ to proper location if needed
         if is_new and self.file:
-            old_file_name = self.file.name
-            if 'templates/temp' in old_file_name:
+            current_path = self.file.name
+            
+            # Check if file is in temp directory
+            if 'templates/temp/' in current_path:
+                print(f"📁 Moving template file from temp: {current_path}")
+                
+                # Extract filename without path
+                filename = os.path.basename(current_path)
+                
+                # Create new path using the now-assigned ID
+                new_path = f'templates/{self.pk}/{filename}'
+                
                 try:
+                    # Read current file
                     with self.file.open('rb') as f:
                         file_content = f.read()
                     
+                    # Delete old file from storage
+                    if self.file.storage.exists(current_path):
+                        self.file.storage.delete(current_path)
+                        print(f"🗑️ Deleted temp file: {current_path}")
+                    
+                    # Save to new location
                     from django.core.files.base import ContentFile
-                    new_filename = os.path.basename(old_file_name)
-                    self.file.save(new_filename, ContentFile(file_content), save=False)
+                    self.file.save(
+                        filename,
+                        ContentFile(file_content),
+                        save=False  # Don't trigger save() again
+                    )
                     
-                    super().save(update_fields=['file'])
+                    # Update database with new path
+                    Template.objects.filter(pk=self.pk).update(file=self.file.name)
                     
-                    try:
-                        self.file.storage.delete(old_file_name)
-                    except Exception as e:
-                        print(f"Warning: Failed to delete temp file {old_file_name}: {e}")
+                    print(f"✅ Template file moved to: {self.file.name}")
+                    
                 except Exception as e:
-                    print(f"Warning: Failed to move template file: {e}")
+                    print(f"⚠️ Error moving template file: {e}")
+    
+    def duplicate(self):
+        """Create a new independent Template by duplicating this one."""
+        from django.core.files.base import ContentFile
+        
+        # ✅ OPTIMIZED: Read file once, reuse for both save and hashing
+        with self.file.open('rb') as f:
+            file_content = f.read()
+        
+        new_template = Template.objects.create(
+            title=f"{self.title} (Copy)",
+            description=self.description,
+            page_count=self.page_count  # ✅ Copy page_count, don't re-read PDF
+        )
+        
+        filename = os.path.basename(self.file.name)
+        new_template.file.save(filename, ContentFile(file_content), save=True)
+        
+        # ✅ OPTIMIZED: Bulk create fields in one query
+        new_fields = []
+        for field in self.fields.all():
+            new_fields.append(
+                TemplateField(
+                    template=new_template,
+                    field_type=field.field_type,
+                    label=field.label,
+                    recipient=field.recipient,
+                    page_number=field.page_number,
+                    x_pct=field.x_pct,
+                    y_pct=field.y_pct,
+                    width_pct=field.width_pct,
+                    height_pct=field.height_pct,
+                    required=field.required,
+                )
+            )
+        
+        if new_fields:
+            TemplateField.objects.bulk_create(new_fields)
+        
+        return new_template
 
 
 class TemplateField(BaseField):

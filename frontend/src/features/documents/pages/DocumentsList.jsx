@@ -57,29 +57,31 @@ export const DocumentsList = () => {
 
   const loadDocuments = async () => {
     try {
-      const axiosResponse = await listDocuments()
-      const response = axiosResponse
+      const response = await listDocuments()
       
+      // ✅ FIXED: Handle paginated response structure correctly
       let docsArray = []
-      if (response && typeof response === 'object') {
-        if (Array.isArray(response)) {
-          docsArray = response
-        } else if (response.results && Array.isArray(response.results)) {
-          docsArray = response.results
-        }
+      
+      // Check if response has a 'results' key (paginated response)
+      if (response && response.results && Array.isArray(response.results)) {
+        docsArray = response.results
+      } 
+      // Otherwise check if response is directly an array
+      else if (Array.isArray(response)) {
+        docsArray = response
+      }
+      // Handle if response is the data object itself
+      else if (response && typeof response === 'object') {
+        docsArray = response
       }
       
-      // ✅ DEBUG: Log the structure
-      if (docsArray.length > 0) {
-        console.log('First document:', docsArray[0])
-        console.log('Recipients:', docsArray[0].recipients)
-        console.log('Recipient Status:', docsArray[0].recipient_status)
-      }
-      
+      // Sort by date descending
       docsArray.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       setDocuments(docsArray)
+      console.log('✅ Loaded documents:', docsArray.length) // DEBUG
     } catch (err) {
       console.error('Failed to load documents:', err)
+      addToast('Failed to load documents', 'error')
     }
   }
 

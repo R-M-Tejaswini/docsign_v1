@@ -20,6 +20,7 @@ export const PublicSign = () => {
   const navigate = useNavigate()
   const [pageData, setPageData] = useState(null)
   const [error, setError] = useState(null)
+  const [isLoading, setIsLoading] = useState(true)
   const { toasts, addToast } = useToast()
 
   const { execute: getSignPage } = useApi(() => publicAPI.getSignPage(token))
@@ -29,12 +30,17 @@ export const PublicSign = () => {
   }, [token])
 
   const loadSignPage = async () => {
+    setIsLoading(true)
     try {
-      const data = await getSignPage()
+      const response = await getSignPage()
+      // ✅ FIXED: Extract .data from axios response
+      const data = response.data || response
+      console.log('✅ PublicSign loaded pageData:', data)
       setPageData(data)
       setError(null)
     } catch (err) {
       const errorData = err.response?.data || {}
+      console.error('❌ PublicSign load error:', err)
       setPageData(null)
       setError({
         message: errorData.error || 'Invalid or expired token',
@@ -42,33 +48,59 @@ export const PublicSign = () => {
       })
       addToast('Invalid or expired token', 'error')
       setTimeout(() => navigate('/'), 2000)
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  if (error) {
-    return <ErrorDisplay error={error} />
-  }
-
-  if (!pageData) {
+  // ✅ GUARD: Show loading while fetching
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600 mb-4"></div>
-          <p className="text-gray-600 font-medium">Loading...</p>
+          <p className="text-gray-600 font-medium">Loading signing page...</p>
         </div>
       </div>
     )
   }
 
+  // ✅ GUARD: Show error if failed
+  if (error) {
+    return <ErrorDisplay error={error} />
+  }
+
+  // ✅ GUARD: Ensure pageData exists and has document
+  if (!pageData?.document) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center bg-white p-8 rounded-lg border-2 border-red-300">
+          <p className="text-6xl mb-4">❌</p>
+          <p className="text-gray-600 font-medium">No document data available</p>
+        </div>
+      </div>
+    )
+  }
+
+  console.log('📄 PublicSign rendering with pageData:', {
+    document: pageData.document?.id,
+    isEditable: pageData.is_editable,
+    scope: pageData.scope,
+    used: pageData.used,
+  })
+
   // Show appropriate component based on document state
   if (pageData.used || pageData.scope === 'view') {
+    console.log('📄 Showing ViewOnlyDisplay')
     return <ViewOnlyDisplay pageData={pageData} />
   }
 
   if (pageData.is_editable && pageData.scope === 'sign') {
+    console.log('📄 Showing SigningForm')
     return <SigningForm token={token} pageData={pageData} onSuccess={loadSignPage} addToast={addToast} />
   }
 
+  console.log('📄 Showing SignaturePreview (fallback)')
   return <SignaturePreview pageData={pageData} />
 }
 

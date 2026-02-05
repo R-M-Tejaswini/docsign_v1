@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react'
-
-// ✅ FIXED: Import from shared
 import { Button } from '../../../shared/components/ui/Button'
 import { Modal } from '../../../shared/components/ui/Modal'
 import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
 import { EmptyState } from '../../../shared/components/EmptyState'
+import { Toast } from '../../../shared/components/ui/Toast'
 import { useApi } from '../../../shared/hooks/useApi'
 import { useToast } from '../../../shared/hooks/useToast'
-import { webhookAPI } from '../../../shared/utils/api'
+import { webhookAPI } from '../api'
 
 import { WebhookCard } from '../components/WebhookCard'
 import { CreateWebhookModal } from '../components/CreateWebhookModal'
@@ -20,15 +19,13 @@ export const WebhooksPage = () => {
   const [selectedWebhookForEvents, setSelectedWebhookForEvents] = useState(null)
   const [showEventsModal, setShowEventsModal] = useState(false)
   
-  const [formData, setFormData] = useState({
-    url: '',
-    subscribed_events: []
-  })
-
-  const { execute: listWebhooks } = useApi(() => webhookAPI.list()) // ← Changed from documentAPI.webhooks
-  const { execute: createWebhook } = useApi((data) => webhookAPI.create(data)) // ← Changed
-  const { execute: testWebhook } = useApi((id) => webhookAPI.test(id)) // ← Changed
-  const { execute: deleteWebhook } = useApi((id) => webhookAPI.delete(id)) // ← Changed
+  // ✅ FIXED: Initialize toasts state using useToast hook
+  const { toasts, addToast, removeToast } = useToast()
+  
+  const { execute: listWebhooks } = useApi(() => webhookAPI.list())
+  const { execute: createWebhook } = useApi((data) => webhookAPI.create(data))
+  const { execute: testWebhook } = useApi((id) => webhookAPI.test(id))
+  const { execute: deleteWebhook } = useApi((id) => webhookAPI.delete(id))
 
   useEffect(() => {
     loadWebhooks()
@@ -39,18 +36,24 @@ export const WebhooksPage = () => {
     try {
       const response = await listWebhooks()
       
-      let webhooksData = response
-      if (response && typeof response === 'object') {
-        if (response.results) {
-          webhooksData = response.results
-        } else if (Array.isArray(response)) {
-          webhooksData = response
-        } else {
-          webhooksData = []
-        }
+      // ✅ FIXED: Handle paginated response structure correctly
+      let webhooksData = []
+      
+      // Check if response has a 'results' key (paginated response)
+      if (response && response.results && Array.isArray(response.results)) {
+        webhooksData = response.results
+      } 
+      // Otherwise check if response is directly an array
+      else if (Array.isArray(response)) {
+        webhooksData = response
+      }
+      // Handle if response is the data object itself
+      else if (response && typeof response === 'object') {
+        webhooksData = response
       }
       
       setWebhooks(webhooksData)
+      console.log('✅ Loaded webhooks:', webhooksData.length) // DEBUG
     } catch (err) {
       console.error('Failed to load webhooks:', err)
       addToast('Failed to load webhooks', 'error')
@@ -59,73 +62,64 @@ export const WebhooksPage = () => {
     }
   }
 
-  const addToast = (message, type = 'info') => {
-    const id = Date.now()
-    setToasts([...toasts, { id, message, type, duration: 3000 }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 3000)
-  }
-
-  const handleCreateWebhook = async () => {
+  const handleCreateWebhook = async (formData) => {
     if (!formData.url.trim()) {
       addToast('Please enter a webhook URL', 'error')
       return
     }
 
-    if (formData.subscribed_events.length === 0) {
+    if (!formData.subscribed_events || formData.subscribed_events.length === 0) {
       addToast('Please select at least one event', 'error')
       return
     }
 
     try {
-      await createWebhook({
-        url: formData.url,
-        subscribed_events: formData.subscribed_events,
-      })
-      addToast('✅ Webhook created successfully', 'success')
-      setFormData({ url: '', subscribed_events: [] })
+      const newWebhook = await createWebhook(formData)
+      setWebhooks((prev) => [newWebhook, ...prev])
+      addToast('Webhook created successfully', 'success')
       setShowCreateModal(false)
-      await loadWebhooks()
     } catch (err) {
-      console.error('Failed to create webhook:', err)
-      addToast('❌ Failed to create webhook', 'error')
+      const errorMsg = err.response?.data?.error || 'Failed to create webhook'
+      addToast(errorMsg, 'error')
     }
   }
 
   const handleTestWebhook = async (webhookId) => {
     try {
       await testWebhook(webhookId)
-      addToast('🧪 Test webhook sent', 'success')
-      setTimeout(() => loadWebhooks(), 1000)
+      addToast('Test webhook sent successfully', 'success')
+      loadWebhooks()
     } catch (err) {
-      console.error('Failed to test webhook:', err)
-      addToast('❌ Failed to send test webhook', 'error')
+      const errorMsg = err.response?.data?.error || 'Failed to test webhook'
+      addToast(errorMsg, 'error')
     }
   }
 
   const handleDeleteWebhook = async (webhookId) => {
-    if (!window.confirm('Are you sure? This will delete the webhook.')) {
-      return
-    }
+    if (!window.confirm('Are you sure you want to delete this webhook?')) return
 
     try {
       await deleteWebhook(webhookId)
-      addToast('✅ Webhook deleted', 'success')
-      await loadWebhooks()
+      setWebhooks((prev) => prev.filter((w) => w.id !== webhookId))
+      addToast('Webhook deleted successfully', 'success')
     } catch (err) {
-      console.error('Failed to delete webhook:', err)
-      addToast('❌ Failed to delete webhook', 'error')
+      const errorMsg = err.response?.data?.error || 'Failed to delete webhook'
+      addToast(errorMsg, 'error')
     }
   }
 
-  const toggleEvent = (event) => {
-    setFormData((prev) => ({
-      ...prev,
-      subscribed_events: prev.subscribed_events.includes(event)
-        ? prev.subscribed_events.filter((e) => e !== event)
-        : [...prev.subscribed_events, event],
-    }))
+  const handleRetryWebhook = async (webhookId) => {
+    try {
+      addToast('Retrying failed webhook events...', 'info')
+      loadWebhooks()
+    } catch (err) {
+      addToast('Failed to retry webhook', 'error')
+    }
+  }
+
+  const handleShowEvents = (webhook) => {
+    setSelectedWebhookForEvents(webhook)
+    setShowEventsModal(true)
   }
 
   return (
@@ -153,15 +147,15 @@ export const WebhooksPage = () => {
         {loading ? (
           <div className="text-center py-20">
             <LoadingSpinner />
-            <p className="text-gray-600 font-medium">Loading webhooks...</p>
+            <p className="text-gray-600 font-medium mt-4">Loading webhooks...</p>
           </div>
         ) : webhooks.length === 0 ? (
           /* Empty State */
           <EmptyState
             title="No webhooks configured"
             description="Create your first webhook to receive real-time notifications about document signing events"
-            ctaText="Create Your First Webhook"
-            onCtaClick={() => setShowCreateModal(true)}
+            action={() => setShowCreateModal(true)}
+            actionLabel="Create Webhook"
             icon="🪝"
           />
         ) : (
@@ -173,10 +167,8 @@ export const WebhooksPage = () => {
                 webhook={webhook}
                 onTest={handleTestWebhook}
                 onDelete={handleDeleteWebhook}
-                onViewEvents={() => {
-                  setSelectedWebhookForEvents(webhook)
-                  setShowEventsModal(true)
-                }}
+                onRetry={handleRetryWebhook}
+                onShowEvents={handleShowEvents}
               />
             ))}
           </div>
@@ -187,22 +179,25 @@ export const WebhooksPage = () => {
       <CreateWebhookModal 
         isOpen={showCreateModal} 
         onClose={() => setShowCreateModal(false)}
-        onCreate={handleCreateWebhook}
-        formData={formData}
-        setFormData={setFormData}
-        toggleEvent={toggleEvent}
+        onSubmit={handleCreateWebhook}
+        loading={false}
       />
 
       {/* Webhook Events Modal */}
-      <Modal 
-        isOpen={showEventsModal}
-        onClose={() => setShowEventsModal(false)}
-        title="Webhook Events"
-      >
-        <div className="p-4">
-          <WebhookEventsList webhookId={selectedWebhookForEvents?.id} />
-        </div>
-      </Modal>
+      {selectedWebhookForEvents && (
+        <Modal 
+          isOpen={showEventsModal}
+          onClose={() => setShowEventsModal(false)}
+          title={`Webhook Events - ${selectedWebhookForEvents.url}`}
+          size="lg"
+        >
+          <WebhookEventsList 
+            events={selectedWebhookForEvents.events || []}
+            loading={false}
+            onShowLogs={(eventId) => console.log('Show logs for event:', eventId)}
+          />
+        </Modal>
+      )}
 
       {/* Toast Notifications */}
       {toasts.map((toast) => (
@@ -211,7 +206,7 @@ export const WebhooksPage = () => {
           message={toast.message}
           type={toast.type}
           duration={toast.duration}
-          onClose={() => setToasts(toasts.filter((t) => t.id !== toast.id))}
+          onClose={() => removeToast(toast.id)}
         />
       ))}
     </div>

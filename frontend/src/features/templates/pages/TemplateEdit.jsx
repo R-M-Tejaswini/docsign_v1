@@ -5,9 +5,10 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { Button } from '../../../shared/components/ui/Button'
 import { Input } from '../../../shared/components/ui/Input'
 import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
+import { Toast } from '../../../shared/components/ui/Toast'  // ✅ ADD THIS LINE
 import { useApi } from '../../../shared/hooks/useApi'
 import { useToast } from '../../../shared/hooks/useToast'
-import { templateAPI } from '../../../shared/utils/api'
+import { templateAPI } from '../api'
 
 // ✅ FIXED: PDF components from correct feature
 import { DocumentViewer } from '../../pdf/components/DocumentViewer'

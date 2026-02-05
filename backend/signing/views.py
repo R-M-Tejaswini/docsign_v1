@@ -1,13 +1,13 @@
 """
 backend/signing/views.py
 
-
 Signing tokens, signatures, public signing, and audit endpoints.
 """
 
 from datetime import datetime
 from io import BytesIO
 import zipfile
+import logging
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -30,6 +30,8 @@ from .services import (
     get_token_service, get_signature_service,
     get_signing_process_service
 )
+
+logger = logging.getLogger(__name__)
 
 
 class StandardResultsSetPagination(PageNumberPagination):
@@ -124,6 +126,8 @@ class PublicSignViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='sign/(?P<token>[^/.]+)')
     def get_sign_page(self, request, token=None):
         """Retrieve signing page data for the provided token."""
+        logger.info(f"🔵 get_sign_page called with token: {token}")
+        
         try:
             # ✅ OPTIMIZED: Use consistent prefetch policy
             signing_token = SigningToken.objects.select_related(
@@ -132,70 +136,101 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'document__fields',
                 'signature_events'
             ).get(token=token)
+            logger.info(f"✅ Token found: {signing_token}")
         except SigningToken.DoesNotExist:
+            logger.error(f"❌ Token not found: {token}")
             return Response(
                 {'error': 'Invalid or expired token'},
                 status=status.HTTP_404_NOT_FOUND
             )
         
-        token_service = get_token_service()
-        is_valid, error_message = token_service.is_token_valid(signing_token)
-        if not is_valid:
-            return Response(
-                {
-                    'error': error_message,
-                    'token_status': 'invalid',
-                    'revoked': signing_token.revoked,
-                    'expired': signing_token.expires_at and signing_token.expires_at < timezone.now() if signing_token.expires_at else False,
-                    'used': signing_token.used
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        document = signing_token.document
-        doc_service = get_document_service()
-        
         try:
+            token_service = get_token_service()
+            is_valid, error_message = token_service.is_token_valid(signing_token)
+            
+            logger.info(f"📋 Token validity: {is_valid}, message: {error_message}")
+            
+            if not is_valid:
+                return Response(
+                    {
+                        'error': error_message,
+                        'token_status': 'invalid',
+                        'revoked': signing_token.revoked,
+                        'expired': signing_token.expires_at and signing_token.expires_at < timezone.now() if signing_token.expires_at else False,
+                        'used': signing_token.used
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            document = signing_token.document
+            doc_service = get_document_service()
+            
+            logger.info(f"📄 Document: {document.id}, status: {document.status}")
+            
+            # ✅ FIXED: Build response data carefully
             editable_field_ids = []
             is_editable = False
             
             if signing_token.scope == 'sign' and not signing_token.used:
                 is_editable = True
                 # ✅ Fields already prefetched
-                editable_field_ids = list(
-                    [f.id for f in document.fields.all()
-                     if f.recipient == signing_token.recipient and not f.locked]
-                )
+                editable_field_ids = [
+                    f.id for f in document.fields.all()
+                    if f.recipient == signing_token.recipient and not f.locked
+                ]
+                logger.info(f"✏️ Editable fields for {signing_token.recipient}: {editable_field_ids}")
             
-            from documents.serializers import DocumentFieldSerializer, DocumentSerializer
+            # ✅ FIXED: Import correct serializers
+            from documents.serializers import DocumentDetailSerializer, DocumentFieldSerializer
+            from signing.serializers import SignatureEventSerializer
+            
+            # ✅ Serialize fields
             fields_data = DocumentFieldSerializer(document.fields.all(), many=True).data
+            logger.info(f"📋 Fields serialized: {len(fields_data)} fields")
             
-            signatures = signing_token.signature_events.all() if signing_token.scope == 'sign' else \
-                        document.signatures.all()
+            # ✅ Get signatures
+            if signing_token.scope == 'sign':
+                signatures = signing_token.signature_events.all()
+            else:
+                signatures = document.signatures.all()
+            
             signatures_data = SignatureEventSerializer(signatures, many=True).data
+            logger.info(f"✍️ Signatures: {len(signatures_data)} signatures")
             
             # ✅ Compute status once
-            recipient_status = doc_service.get_recipient_status(document) if signing_token.recipient else None
+            recipient_status = None
+            if signing_token.recipient:
+                recipient_status = doc_service.get_recipient_status(document)
+                logger.info(f"👥 Recipient status: {recipient_status}")
             
-            return Response({
+            # ✅ Build document data with proper context
+            document_data = DocumentDetailSerializer(
+                document,
+                context={
+                    'request': request,
+                    '_recipient_status_cache': {document.id: recipient_status} if recipient_status else {}
+                }
+            ).data
+            logger.info(f"✅ Document data built successfully")
+            
+            response_data = {
                 'token': token,
                 'scope': signing_token.scope,
                 'recipient': signing_token.recipient,
                 'is_editable': is_editable,
                 'editable_field_ids': editable_field_ids,
-                'document': DocumentSerializer(
-                    document,
-                    context={
-                        'request': request,
-                        '_recipient_status_cache': {document.id: recipient_status} if recipient_status else {}
-                    }
-                ).data,
+                'document': document_data,
                 'fields': fields_data,
                 'signatures': signatures_data,
-                'expires_at': signing_token.expires_at,
+                'expires_at': signing_token.expires_at.isoformat() if signing_token.expires_at else None,
                 'recipient_status': recipient_status
-            })
+            }
+            
+            logger.info(f"✅ Response prepared successfully")
+            return Response(response_data)
+        
         except Exception as e:
+            logger.exception(f"❌ Error in get_sign_page: {str(e)}")
             return Response(
                 {'error': f'Internal server error: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -204,6 +239,8 @@ class PublicSignViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'], url_path='sign/(?P<token>[^/.]+)')
     def submit_signature(self, request, token=None):
         """Submit signature data for a recipient using a sign token."""
+        logger.info(f"✍️ submit_signature called with token: {token}")
+        
         try:
             # ✅ OPTIMIZED: Consistent prefetch
             signing_token = SigningToken.objects.select_related(
@@ -212,6 +249,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'document__fields'
             ).get(token=token)
         except SigningToken.DoesNotExist:
+            logger.error(f"❌ Token not found: {token}")
             return Response(
                 {'error': 'Invalid token'},
                 status=status.HTTP_404_NOT_FOUND
@@ -223,6 +261,8 @@ class PublicSignViewSet(viewsets.ViewSet):
         signer_name = serializer.validated_data['signer_name']
         field_values = serializer.validated_data['field_values']
         
+        logger.info(f"📝 Signing submission: {signer_name} for {signing_token.recipient}")
+        
         try:
             signing_process = get_signing_process_service()
             result = signing_process.process_signature_submission(
@@ -233,15 +273,18 @@ class PublicSignViewSet(viewsets.ViewSet):
                 request.META.get('HTTP_USER_AGENT', '')
             )
             
+            logger.info(f"✅ Signature processed successfully")
             response_serializer = PublicSignResponseSerializer(result['response_data'])
             return Response(response_serializer.data, status=status.HTTP_200_OK)
         
         except DjangoValidationError as e:
+            logger.error(f"❌ Validation error: {str(e)}")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            logger.exception(f"❌ Error signing: {str(e)}")
             return Response(
                 {'error': f'Signing failed: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -250,21 +293,26 @@ class PublicSignViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'], url_path='public/download/(?P<token>[^/.]+)')
     def download_public(self, request, token=None):
         """Download PDF for a public token (works for both sign and view scopes)."""
+        logger.info(f"📥 download_public called with token: {token}")
+        
         try:
             signing_token = SigningToken.objects.select_related('document').get(token=token)
         except SigningToken.DoesNotExist:
+            logger.error(f"❌ Token not found: {token}")
             return Response(
                 {'error': 'Invalid token'},
                 status=status.HTTP_404_NOT_FOUND
             )
         
         if signing_token.revoked:
+            logger.warning(f"⚠️ Token revoked: {token}")
             return Response(
                 {'error': 'This link has been revoked'},
                 status=status.HTTP_403_FORBIDDEN
             )
         
         if signing_token.expires_at and timezone.now() > signing_token.expires_at:
+            logger.warning(f"⚠️ Token expired: {token}")
             return Response(
                 {'error': 'This link has expired'},
                 status=status.HTTP_403_FORBIDDEN
@@ -273,12 +321,14 @@ class PublicSignViewSet(viewsets.ViewSet):
         document = signing_token.document
         
         if signing_token.scope == 'sign' and document.status != 'completed':
+            logger.warning(f"⚠️ Document not completed: {document.id}")
             return Response(
                 {'error': 'Document is not yet completed'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         if not document.file:
+            logger.error(f"❌ Document file not found: {document.id}")
             return Response(
                 {'error': 'Document file not found'},
                 status=status.HTTP_404_NOT_FOUND
@@ -290,9 +340,11 @@ class PublicSignViewSet(viewsets.ViewSet):
                 content_type='application/pdf'
             )
             response['Content-Disposition'] = f'attachment; filename="{document.title}.pdf"'
+            logger.info(f"✅ PDF download started: {document.title}")
             return response
         
         except Exception as e:
+            logger.exception(f"❌ Error downloading PDF: {str(e)}")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -387,6 +439,7 @@ class SignatureVerificationViewSet(viewsets.ViewSet):
             return response
         
         except Exception as e:
+            logger.exception(f"❌ Audit export error: {str(e)}")
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

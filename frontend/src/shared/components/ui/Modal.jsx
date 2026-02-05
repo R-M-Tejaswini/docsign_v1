@@ -1,9 +1,8 @@
 /**
- * ✅ UNIFIED: Reusable modal component
+ * ✅ UNIFIED: Reusable modal component with proper z-index layering
  */
 
 import { useEffect } from 'react'
-import { Button } from './Button'
 
 export const Modal = ({ 
   isOpen, 
@@ -36,30 +35,37 @@ export const Modal = ({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-      <div
-        className={`bg-white rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto ${sizeClasses[size]}`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b-2 border-gray-200 px-6 py-4 flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-900 text-2xl font-bold transition-colors"
-          >
-            ✕
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="p-6">{children}</div>
-      </div>
-
-      {/* Backdrop */}
+    <>
+      {/* ✅ FIXED: Backdrop is separate with lower z-index */}
       {closeOnBackdropClick && (
-        <div className="fixed inset-0 z-40" onClick={onClose} />
+        <div 
+          className="fixed inset-0 z-40 bg-black bg-opacity-50" 
+          onClick={onClose}
+        />
       )}
-    </div>
+      
+      {/* ✅ FIXED: Modal content container with higher z-index */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+        {/* ✅ FIXED: Content div has pointer-events-auto to receive clicks */}
+        <div
+          className={`${sizeClasses[size]} bg-white rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto pointer-events-auto`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="sticky top-0 bg-white border-b-2 border-gray-200 px-6 py-4 flex justify-between items-center z-10">
+            <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
+            <button
+              onClick={onClose}
+              className="text-gray-500 hover:text-gray-900 text-2xl font-bold transition-colors flex-shrink-0"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Body - scrollable content */}
+          <div className="p-6">{children}</div>
+        </div>
+      </div>
+    </>
   )
 }

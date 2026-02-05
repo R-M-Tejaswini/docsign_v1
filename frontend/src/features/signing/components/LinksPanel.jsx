@@ -5,13 +5,15 @@
 
 import { useState, useEffect } from 'react'
 
-// ✅ FIXED: Import from shared
+// ✅ FIXED: Add this import
+import { useClipboard } from '../../../shared/hooks/useClipboard'
 import { Button } from '../../../shared/components/ui/Button'
 import { Modal } from '../../../shared/components/ui/Modal'
 import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
 import { useApi } from '../../../shared/hooks/useApi'
 import { useToast } from '../../../shared/hooks/useToast'
-import { tokenAPI } from '../../../shared/utils/api'
+import { tokenAPI } from '../api'  // ✅ FIXED: Changed from '../../api' to '../api'
+import { getRecipientBadgeClasses } from '../../../shared/utils/recipientColors'
 
 import { LinkCard } from './LinkCard'
 import { GenerateLinkModal } from './GenerateLinkModal'
@@ -21,7 +23,8 @@ export const LinksPanel = ({ document }) => {
   const [tokens, setTokens] = useState([])
   const [showModal, setShowModal] = useState(false)
   const [expandedTokenId, setExpandedTokenId] = useState(null)
-  const { copy, copied } = useClipboard()
+  const { copy, copied } = useClipboard()  // ✅ Now it's defined
+  const { addToast } = useToast()
 
   // ✅ UPDATED: Only document.id (no version.id)
   const { execute: listTokens, loading } = useApi(() =>
@@ -31,16 +34,44 @@ export const LinksPanel = ({ document }) => {
   const { execute: revokeToken } = useApi((token) => tokenAPI.revoke(token))
 
   useEffect(() => {
-    loadTokens()
-  }, [document.id])
+    if (document?.id) {
+      loadTokens()
+    }
+  }, [document?.id])
 
   const loadTokens = async () => {
     try {
-      const data = await listTokens()
-      // ✅ UPDATED: Removed version_id filter (all tokens belong to document directly now)
-      setTokens(Array.isArray(data) ? data : data.results || [])
+      console.log(`📋 Loading tokens for document ${document.id}...`)
+      const response = await listTokens()
+      console.log('✅ Full response:', response)
+      
+      // ✅ FIXED: Extract data correctly from axios response
+      let data = response
+      
+      // If it's an axios response with .data property
+      if (response?.data) {
+        data = response.data
+      }
+      
+      console.log('✅ Extracted data:', data)
+      
+      // Now handle different data structures
+      if (Array.isArray(data)) {
+        console.log(`✅ Setting ${data.length} tokens`)
+        setTokens(data)
+      } else if (data?.results && Array.isArray(data.results)) {
+        console.log(`✅ Setting ${data.results.length} tokens from results`)
+        setTokens(data.results)
+      } else if (data?.links && Array.isArray(data.links)) {
+        console.log(`✅ Setting ${data.links.length} tokens from links`)
+        setTokens(data.links)
+      } else {
+        console.warn('⚠️ Unexpected data structure:', data)
+        setTokens([])
+      }
     } catch (err) {
-      console.error('Failed to load tokens:', err)
+      console.error('❌ Failed to load tokens:', err)
+      setTokens([])
     }
   }
 
@@ -51,13 +82,16 @@ export const LinksPanel = ({ document }) => {
 
     try {
       await revokeToken(tokenStr)
+      addToast('Link revoked', 'success')
       await loadTokens()
     } catch (err) {
-      alert('Failed to revoke token')
+      console.error('❌ Failed to revoke token:', err)
+      addToast('Failed to revoke link', 'error')
     }
   }
 
   const handleGenerateSuccess = () => {
+    console.log('✅ Link generated, reloading tokens...')
     loadTokens()
   }
 
@@ -153,7 +187,7 @@ export const LinksPanel = ({ document }) => {
           </div>
         )}
 
-        {tokens.length === 0 && !loading && (
+        {!loading && tokens.length === 0 && (
           <div className="text-center py-12 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
             <div className="text-5xl mb-4">🔗</div>
             <p className="text-gray-600 font-medium">No links created yet</p>
@@ -164,7 +198,7 @@ export const LinksPanel = ({ document }) => {
         )}
 
         {/* Token List */}
-        {tokens.map((token) => {
+        {tokens && tokens.length > 0 && tokens.map((token) => {
           const badge = getTokenStatusBadge(token)
           const isExpanded = expandedTokenId === token.id
           
@@ -285,7 +319,7 @@ export const LinksPanel = ({ document }) => {
 
                   {/* Action Buttons */}
                   <div className="flex gap-2 pt-2 border-t-2 border-gray-200">
-                    {!token.revoked ? (
+                    {!token.revoked && !token.used ? (
                       <Button
                         onClick={() => handleRevoke(token.token)}
                         variant="danger"
@@ -297,7 +331,7 @@ export const LinksPanel = ({ document }) => {
                       </Button>
                     ) : (
                       <div className="flex-1 px-3 py-2 bg-red-50 border-2 border-red-300 rounded-lg text-xs text-red-800 text-center font-bold">
-                        ✕ This link has been revoked
+                        ✕ Link {token.revoked ? 'revoked' : 'used'}
                       </div>
                     )}
                   </div>

@@ -20,7 +20,10 @@ export const WebhookCard = ({ webhook, onDelete, onTest, onRetry, onShowEvents }
     }
   }
 
-  const successRate = webhook.success_rate !== null ? `${webhook.success_rate}%` : 'N/A'
+  // ✅ FIXED: Handle missing data gracefully
+  const successRate = webhook.success_rate !== null ? `${Math.round(webhook.success_rate)}%` : 'N/A'
+  const totalDeliveries = webhook.total_deliveries || 0
+  const subscribedEventsList = webhook.events_list || webhook.subscribed_events || []
 
   return (
     <div className="bg-white rounded-xl shadow-md hover:shadow-lg transition-all p-6 border-2 border-gray-200 hover:border-blue-300">
@@ -32,7 +35,7 @@ export const WebhookCard = ({ webhook, onDelete, onTest, onRetry, onShowEvents }
             Created {new Date(webhook.created_at).toLocaleDateString()}
           </p>
         </div>
-        <div className={`px-3 py-1 rounded-full text-xs font-bold ${webhook.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+        <div className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${webhook.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
           {webhook.is_active ? '🟢 Active' : '🔴 Inactive'}
         </div>
       </div>
@@ -41,7 +44,7 @@ export const WebhookCard = ({ webhook, onDelete, onTest, onRetry, onShowEvents }
       <div className="grid grid-cols-3 gap-4 mb-4 text-sm">
         <div>
           <p className="text-gray-600">Deliveries</p>
-          <p className="font-bold text-gray-900">{webhook.total_deliveries}</p>
+          <p className="font-bold text-gray-900">{totalDeliveries}</p>
         </div>
         <div>
           <p className="text-gray-600">Success Rate</p>
@@ -51,16 +54,16 @@ export const WebhookCard = ({ webhook, onDelete, onTest, onRetry, onShowEvents }
         </div>
         <div>
           <p className="text-gray-600">Events</p>
-          <p className="font-bold text-gray-900">{webhook.subscribed_events?.length || 0}</p>
+          <p className="font-bold text-gray-900">{subscribedEventsList.length}</p>
         </div>
       </div>
 
       {/* Events List */}
-      {webhook.events_list && webhook.events_list.length > 0 && (
+      {subscribedEventsList.length > 0 && (
         <div className="mb-4 p-3 bg-gray-50 rounded border border-gray-200">
           <p className="text-xs font-bold text-gray-900 mb-2">Subscribed Events:</p>
           <div className="flex flex-wrap gap-2">
-            {webhook.events_list.map((event) => (
+            {subscribedEventsList.map((event) => (
               <span key={event} className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
                 {event}
               </span>
@@ -99,7 +102,11 @@ export const WebhookCard = ({ webhook, onDelete, onTest, onRetry, onShowEvents }
         <Button
           variant="secondary"
           size="sm"
-          onClick={() => onDelete(webhook.id)}
+          onClick={() => {
+            if (window.confirm('Delete this webhook?')) {
+              onDelete(webhook.id)
+            }
+          }}
           className="flex-1"
         >
           Delete

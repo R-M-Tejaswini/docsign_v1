@@ -3,25 +3,21 @@
  * Now displays audit trail directly for documents (no version_id)
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 
 // ✅ FIXED: Import from shared
 import { Button } from '../../../shared/components/ui/Button'
 import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
 import { useApi } from '../../../shared/hooks/useApi'
-import { signatureAPI } from '../../../shared/utils/api'
+import { useClipboard } from '../../../shared/hooks/useClipboard'
+import { documentAPI } from '../../documents/api'
 
-import { SignatureCard } from './SignatureCard'
-import { VerificationStatus } from './VerificationStatus'
-
-export const AuditTrailPanel = ({ document: doc }) => {  // ✅ Removed version prop
+export const AuditTrailPanel = ({ document: doc }) => {
   const [expandedSignatureId, setExpandedSignatureId] = useState(null)
-  const [showMetadata, setShowMetadata] = useState({})
   const [verifying, setVerifying] = useState({})
   const [verificationResults, setVerificationResults] = useState({})
   const { copy, copied } = useClipboard()
 
-  // ✅ CONSOLIDATED: No version_id parameter
   const { execute: verifySignature } = useApi((sigId) =>
     documentAPI.verifySignature(doc.id, sigId)
   )
@@ -62,7 +58,7 @@ export const AuditTrailPanel = ({ document: doc }) => {  // ✅ Removed version 
   const signatures = doc.signatures || []
 
   return (
-    <div className="space-y-4">
+    <div className="p-6 space-y-4">
       {/* Export Button */}
       {signatures.length > 0 && (
         <Button
@@ -116,7 +112,9 @@ export const AuditTrailPanel = ({ document: doc }) => {  // ✅ Removed version 
                       <div className="text-sm space-y-1">
                         <p><span className="font-semibold">Recipient:</span> {signature.recipient}</p>
                         <p><span className="font-semibold">IP Address:</span> {signature.ip_address || 'N/A'}</p>
-                        <p><span className="font-semibold">Event Hash:</span> <code className="text-xs bg-gray-100 px-2 py-1 rounded">{signature.event_hash?.substring(0, 16)}...</code></p>
+                        {signature.event_hash && (
+                          <p><span className="font-semibold">Event Hash:</span> <code className="text-xs bg-gray-100 px-2 py-1 rounded">{signature.event_hash?.substring(0, 16)}...</code></p>
+                        )}
                       </div>
                     </div>
 
@@ -150,22 +148,6 @@ export const AuditTrailPanel = ({ document: doc }) => {  // ✅ Removed version 
                         <p className={`text-sm font-bold ${result.valid ? 'text-green-900' : 'text-red-900'}`}>
                           {result.valid ? '✓ Signature Valid' : '✗ Signature Invalid'}
                         </p>
-                      </div>
-                    )}
-
-                    {/* Field Values */}
-                    {signature.field_values && signature.field_values.length > 0 && (
-                      <div>
-                        <label className="text-xs font-bold text-gray-600 uppercase mb-2 block">
-                          Fields Signed ({signature.field_values.length})
-                        </label>
-                        <div className="space-y-1 max-h-40 overflow-y-auto">
-                          {signature.field_values.map((fv, idx) => (
-                            <div key={idx} className="text-xs p-2 bg-gray-50 rounded border border-gray-200">
-                              <p><span className="font-semibold">Field {fv.field_id}:</span> {fv.value?.substring(0, 50)}</p>
-                            </div>
-                          ))}
-                        </div>
                       </div>
                     )}
                   </div>

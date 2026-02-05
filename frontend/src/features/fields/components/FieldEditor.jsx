@@ -1,14 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect} from 'react'
 
-// ✅ FIXED: Import from shared
+// ✅ FIXED: Import getRecipientBadgeClasses from shared utils
+import { getRecipientBadgeClasses } from '../../../shared/utils/recipientColors'
 import { Button } from '../../../shared/components/ui/Button'
 import { Input } from '../../../shared/components/ui/Input'
 
-// ✅ FIXED: Field utilities from same feature
-import { validateField, validateFieldValue } from '../utils/fieldValidation'
-import { FIELD_TYPE_INFO } from '../types'
-
-export const FieldEditor = ({ field, onUpdate, onDelete, allRecipients = [], canEdit = true }) => {
+export const FieldEditor = ({ 
+  field, 
+  onUpdate, 
+  onDelete, 
+  allRecipients = [], 
+  canEdit = false 
+}) => {
   const [label, setLabel] = useState(field?.label || '')
   const [required, setRequired] = useState(field?.required ?? true)
   const [recipient, setRecipient] = useState(field?.recipient || '')

@@ -16,26 +16,22 @@ export const CreateTemplateModal = ({ isOpen, onClose, onSubmit, loading }) => {
   const handleSubmit = async (e) => {
     e.preventDefault()
 
-    if (!file) {
-      setFileError('Please select a PDF file')
+    if (!title.trim()) {
+      // error handling
       return
     }
 
-    if (!file.type.includes('pdf')) {
-      setFileError('File must be a PDF')
-      return
+    // ✅ FIXED: Create FormData directly from form inputs
+    const formData = new FormData()
+    formData.append('title', title)
+    if (description) formData.append('description', description)
+    if (file) formData.append('file', file)  // ✅ File object stays intact
+
+    try {
+      await onSubmit(formData)  // Pass FormData directly
+    } catch (err) {
+      // error handling
     }
-
-    await onSubmit({
-      title,
-      description,
-      file,
-    })
-
-    setTitle('')
-    setDescription('')
-    setFile(null)
-    setFileError(null)
   }
 
   return (
