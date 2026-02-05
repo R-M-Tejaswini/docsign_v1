@@ -61,7 +61,7 @@ class StandardResultsSetPagination(PageNumberPagination):
 # ----------------------------
 class DocumentViewSet(viewsets.ModelViewSet):
     """ViewSet for document CRUD operations only."""
-    queryset = Document.objects.all()
+    queryset = Document.objects.all().prefetch_related('fields')
     pagination_class = StandardResultsSetPagination
     permission_classes = [AllowAny]
     
@@ -120,29 +120,41 @@ class DocumentViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['post'])
     def lock(self, request, pk=None):
-        """Lock a draft document to prevent further edits."""
+        """✅ FIXED: Lock document for signing."""
         document = self.get_object()
         
         if document.status != 'draft':
             return Response(
-                {'error': 'Only draft documents can be locked'},
+                {'error': f'Document is already {document.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        fields_without_recipient = document.fields.filter(recipient__isnull=True) | \
-                                   document.fields.filter(recipient='')
+        doc_service = get_document_service()
         
-        if fields_without_recipient.exists():
+        # ✅ FIXED: Call the validation method
+        is_valid, error_message = doc_service.validate_document_for_locking(document)
+        
+        if not is_valid:
             return Response(
-                {'error': 'All fields must be assigned to a recipient'},
+                {'error': error_message},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
+        # ✅ Mark fields as locked and lock document
+        document.fields.all().update(locked=True)
         document.status = 'locked'
         document.save(update_fields=['status'])
         
-        serializer = DocumentDetailSerializer(document, context={'request': request})
-        return Response(serializer.data)
+        print(f"✅ Document {document.id} locked for signing")
+        
+        output_serializer = DocumentDetailSerializer(
+            document,
+            context={'request': request}
+        )
+        return Response(
+            output_serializer.data,
+            status=status.HTTP_200_OK
+        )
     
     @action(detail=True, methods=['get'])
     def available_recipients(self, request, pk=None):
@@ -198,61 +210,60 @@ class DocumentViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED
         )
     
-    @action(detail=True, methods=['patch'])
+    @action(detail=True, methods=['patch'], url_path='fields/(?P<field_id>[0-9]+)')
     def update_field(self, request, pk=None, field_id=None):
-        """Update a field on a draft document."""
+        """✅ FIXED: Update a field on this document."""
         document = self.get_object()
-        field_id = request.parser_context['kwargs'].get('field_id') or request.data.get('field_id')
+        field = get_object_or_404(DocumentField, id=field_id, document=document)
         
-        if not field_id:
+        # ✅ CRITICAL: Use PATCH serializer for updates
+        serializer = DocumentFieldUpdateSerializer(
+            field,
+            data=request.data,
+            partial=True  # ✅ Allow partial updates
+        )
+        
+        if not serializer.is_valid():
+            print(f"❌ Field update validation error: {serializer.errors}")
             return Response(
-                {'error': 'field_id is required'},
+                {'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        field = get_object_or_404(document.fields, id=field_id)
-        
-        if document.status == 'draft':
-            serializer = DocumentFieldSerializer(field, data=request.data, partial=True)
-        else:
+        try:
+            updated_field = serializer.save()
+            print(f"✅ Field {field_id} updated successfully")
             return Response(
-                {'error': 'Cannot edit fields on locked documents'},
+                DocumentFieldSerializer(updated_field).data,
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            print(f"❌ Field update error: {e}")
+            return Response(
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        
-        return Response(DocumentFieldSerializer(field).data, status=status.HTTP_200_OK)
     
-    @action(detail=True, methods=['delete'])
+    @action(detail=True, methods=['delete'], url_path='fields/(?P<field_id>[0-9]+)')
     def delete_field(self, request, pk=None, field_id=None):
-        """Delete a field from a draft document."""
+        """✅ FIXED: Delete a field from this document."""
         document = self.get_object()
-        field_id = request.parser_context['kwargs'].get('field_id') or request.data.get('field_id')
+        field = get_object_or_404(DocumentField, id=field_id, document=document)
         
-        if not field_id:
+        try:
+            field_label = field.label
+            field.delete()
+            print(f"✅ Field {field_id} ({field_label}) deleted")
             return Response(
-                {'error': 'field_id is required'},
+                {'message': 'Field deleted successfully'},
+                status=status.HTTP_204_NO_CONTENT
+            )
+        except Exception as e:
+            print(f"❌ Field deletion error: {e}")
+            return Response(
+                {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        field = get_object_or_404(document.fields, id=field_id)
-        
-        if document.status != 'draft':
-            return Response(
-                {'error': 'Cannot delete fields from locked documents'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        if field.locked:
-            return Response(
-                {'error': 'Cannot delete signed fields'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        field.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
     
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):

@@ -1,14 +1,10 @@
 //frontend/src/features/pdf/components/FieldOverlay.jsx
 /**
- * frontend/src/features/pdf/components/FieldOverlay.jsx
- * ✅ NEW: Interactive field overlay on PDF for editing
+ * ✅ FIXED: Field overlay with proper react-rnd props
  */
 
 import { useState } from 'react'
 import { Rnd } from 'react-rnd'
-
-// ✅ FIXED: Import from pdf utils, not fields utils
-import { pctToPx } from '../utils/coords'
 import { getFieldDisplayInfo } from '../../fields/utils/fieldRules'
 
 export const FieldOverlay = ({
@@ -54,6 +50,12 @@ export const FieldOverlay = ({
     })
   }
 
+  // ✅ For static prefilled fields, show preview of the text
+  const showPrefillPreview =
+    field.field_type === 'prefilled_text' &&
+    !field.is_editable_prefill &&
+    field.prefill_value
+
   return (
     <Rnd
       default={{
@@ -66,29 +68,48 @@ export const FieldOverlay = ({
       size={{ width, height }}
       onDragStop={handleDragStop}
       onResizeStop={handleResizeStop}
-      disableDragging={!isEditing}
-      disableResizing={!isEditing}
+      // ✅ FIXED: Use enableResizing (not disableResizing)
       enableResizing={isEditing}
-      className={`border-2 flex items-center justify-center select-none ${
-        isSelected
-          ? 'border-blue-500 bg-blue-100 bg-opacity-40 shadow-lg'
-          : 'border-gray-400 bg-gray-100 bg-opacity-20 hover:border-gray-500'
-      } ${!isEditing && 'cursor-default'}`}
+      // ✅ FIXED: Use onDragStart/onDragStop to control dragging
+      dragEnabled={isEditing}
+      resizeEnabled={isEditing}
+      className={`
+        border-2 flex flex-col items-center justify-center select-none
+        ${isSelected
+          ? `${info.borderColor} ${info.color} bg-opacity-40 shadow-lg`
+          : `border-gray-400 bg-gray-100 bg-opacity-20 hover:border-gray-500`
+        }
+      `}
       style={{
         zIndex: isSelected ? 20 : 10,
         cursor: isEditing ? 'move' : 'default',
         userSelect: 'none',
+        padding: '4px',
       }}
       onClick={(e) => {
         e.stopPropagation()
         onSelect?.(field.id)
       }}
     >
-      <div className="text-center pointer-events-none">
-        <div className="text-2xl">{info.icon}</div>
-        <div className="text-xs font-bold text-gray-700 mt-1">{field.label}</div>
-        <div className="text-xs text-gray-600">{field.field_type}</div>
-      </div>
+      {/* ✅ Prefill preview for static fields */}
+      {showPrefillPreview ? (
+        <div className="text-center pointer-events-none overflow-hidden text-clip">
+          <div className="text-xs font-bold text-gray-700 mb-1">{field.label}</div>
+          <div className="text-xs text-gray-600 leading-tight line-clamp-2">
+            {field.prefill_value}
+          </div>
+        </div>
+      ) : (
+        <div className="text-center pointer-events-none">
+          <div className="text-2xl">{info.icon}</div>
+          <div className="text-xs font-bold text-gray-700 mt-1">{field.label}</div>
+          <div className="text-xs text-gray-600">{field.field_type}</div>
+          {/* Show editable badge for editable prefilled fields */}
+          {field.field_type === 'prefilled_text' && field.is_editable_prefill && (
+            <div className="text-xs text-teal-600 font-semibold mt-1">✏️ Editable</div>
+          )}
+        </div>
+      )}
     </Rnd>
   )
 }

@@ -1,7 +1,7 @@
 """
 backend/documents/serializers.py
 
-✅ OPTIMIZED: Cache recipients and status per request
+✅ UPDATED: Fixed field update serializer
 """
 
 from rest_framework import serializers
@@ -16,9 +16,41 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'field_type', 'label', 'recipient', 'page_number',
             'x_pct', 'y_pct', 'width_pct', 'height_pct',
-            'required', 'value', 'locked'
+            'required', 'value', 'locked',
+            'prefill_value', 'is_editable_prefill',  # ✅ NEW
         ]
         read_only_fields = ['id', 'locked']
+    
+    def validate(self, data):
+        """✅ NEW: Validate prefilled_text specific rules."""
+        field_type = data.get('field_type')
+        recipient = data.get('recipient')
+        is_editable = data.get('is_editable_prefill', False)
+        prefill_value = data.get('prefill_value')
+        
+        # ✅ Prefilled text validation
+        if field_type == 'prefilled_text':
+            # Static prefilled: recipient optional, prefill_value required
+            if not is_editable and not prefill_value:
+                raise serializers.ValidationError(
+                    {'prefill_value': 'Static prefilled fields must have a prefill_value'}
+                )
+            
+            # Editable prefilled: recipient required
+            if is_editable and not recipient:
+                raise serializers.ValidationError(
+                    {'recipient': 'Editable prefilled fields must have a recipient'}
+                )
+            
+            # Non-prefilled field types should not have these fields set
+            # (but allow them to be null/blank for flexibility)
+        
+        # ✅ For non-prefilled types, prefill_value should be empty
+        if field_type != 'prefilled_text':
+            data['prefill_value'] = None
+            data['is_editable_prefill'] = False
+        
+        return data
 
 
 class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
@@ -26,7 +58,34 @@ class DocumentFieldUpdateSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DocumentField
-        fields = ['value', 'recipient', 'label', 'required', 'x_pct', 'y_pct', 'width_pct', 'height_pct']
+        fields = [
+            'value', 'recipient', 'label', 'required',
+            'x_pct', 'y_pct', 'width_pct', 'height_pct',
+            'prefill_value', 'is_editable_prefill',
+        ]
+    
+    def validate(self, data):
+        """✅ FIXED: Validate on update with proper instance access."""
+        instance = self.instance
+        
+        # ✅ CRITICAL: instance might be None if called wrong
+        if not instance:
+            return data
+        
+        field_type = instance.field_type  # ✅ Use instance, not data
+        is_editable = data.get('is_editable_prefill', instance.is_editable_prefill)
+        recipient = data.get('recipient', instance.recipient)
+        prefill_value = data.get('prefill_value', instance.prefill_value)
+        
+        # ✅ Only validate prefilled_text fields
+        if field_type == 'prefilled_text':
+            # Editable prefilled fields must have recipient
+            if is_editable and not recipient:
+                raise serializers.ValidationError({
+                    'recipient': 'Editable prefilled fields must have a recipient'
+                })
+        
+        return data
 
 
 class DocumentDetailSerializer(serializers.ModelSerializer):

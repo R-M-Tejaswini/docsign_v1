@@ -1,8 +1,6 @@
 /**
- * ✅ EXTRACTED: Signing form interface
- * ✅ FIXED: Proper file URL handling
- * ✅ FIXED: Guard against undefined pageData
- * ✅ NEW: Live preview of field values on PDF
+ * ✅ COMPLETE: Signing form with prefilled_text support
+ * ✅ Features: Live preview, field validation, prefill defaults
  */
 
 import { useState, useEffect } from 'react'
@@ -10,6 +8,7 @@ import { DocumentViewer } from '../../../pdf/components/DocumentViewer'
 import { PageLayer } from '../../../pdf/components/PageLayer'
 import { FieldOverlay } from '../../../pdf/components/FieldOverlay'
 import { Button } from '../../../../shared/components/ui/Button'
+import { Toast } from '../../../../shared/components/ui/Toast'
 import { useApi } from '../../../../shared/hooks/useApi'
 import { publicAPI } from '../../api'
 import { getFieldDisplayInfo } from '../../../fields/utils/fieldRules'
@@ -23,12 +22,18 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
 
   const { execute: submitSignature } = useApi((signData) => publicAPI.submitSignature(token, signData))
 
+  // ✅ INITIALIZE: Prefilled text fields with their default values
   useEffect(() => {
     if (!pageData?.fields) return
     
     const initialValues = {}
     pageData.fields.forEach((field) => {
-      initialValues[field.id] = field.value || ''
+      // ✅ NEW: For prefilled_text, use prefill_value as default
+      if (field.field_type === 'prefilled_text') {
+        initialValues[field.id] = field.prefill_value || field.value || ''
+      } else {
+        initialValues[field.id] = field.value || ''
+      }
     })
     setFieldValues(initialValues)
     console.log('✅ SigningForm initialized with fields:', pageData.fields)
@@ -47,23 +52,33 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
   }
 
   const handleFieldChange = (fieldId, value) => {
+    // ✅ NEW: Check if field is editable (skip if static prefilled)
+    const field = pageData.fields?.find(f => f.id === fieldId)
+    
+    // Static prefilled fields are never editable
+    if (field?.field_type === 'prefilled_text' && !field.is_editable_prefill) {
+      return
+    }
+    
+    // Only allow changes to fields assigned to this recipient
     if (!pageData.editable_field_ids?.includes(fieldId)) return
+    
     setFieldValues((prev) => ({ ...prev, [fieldId]: value }))
   }
 
   const handleSubmit = async () => {
-    const filledFields = pageData.fields
-      .filter((f) => pageData.editable_field_ids?.includes(f.id))
-      .map((f) => ({
-        field_id: f.id,
-        value: fieldValues[f.id] || '',
-      }))
-
+    // ✅ NEW: Validate required editable fields (not static prefilled)
     const editableRequiredFields = pageData.fields.filter(
       (f) => pageData.editable_field_ids?.includes(f.id) && f.required
     )
-    const filledFieldIds = new Set(filledFields.map((f) => f.field_id))
-    const missingRequired = editableRequiredFields.filter((f) => !filledFieldIds.has(f.id))
+    
+    const filledFieldIds = new Set(
+      editableRequiredFields
+        .filter(f => fieldValues[f.id] && fieldValues[f.id].trim())
+        .map(f => f.id)
+    )
+    
+    const missingRequired = editableRequiredFields.filter(f => !filledFieldIds.has(f.id))
 
     if (missingRequired.length > 0) {
       addToast(
@@ -75,22 +90,29 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
 
     setSubmitting(true)
     try {
+      // ✅ NEW: Include ALL field values (including static prefilled)
+      // Backend will only process editable fields
+      const filledFields = pageData.fields.map((f) => ({
+        field_id: f.id,
+        value: fieldValues[f.id] || '',
+      }))
+
       const signData = {
-        signer_name: signerName,
+        signer_name: signerName.trim(),
         field_values: filledFields,
       }
 
-      await submitSignature(signData)
-      addToast('Document signed successfully!', 'success')
-
-      setTimeout(async () => {
-        onSuccess()
-        setSignerName('')
-        setFieldValues({})
-      }, 500)
+      const result = await submitSignature(signData)
+      addToast('✅ Signature submitted successfully!', 'success')
+      
+      // Reload page data to show completion state
+      if (onSuccess) {
+        setTimeout(() => onSuccess(), 1000)
+      }
     } catch (err) {
-      const errorMsg = err.response?.data?.error || err.message || 'Failed to sign document'
+      const errorMsg = err.response?.data?.error || 'Failed to submit signature'
       addToast(errorMsg, 'error')
+      console.error('Signature submission error:', err)
     } finally {
       setSubmitting(false)
     }
@@ -105,222 +127,270 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
   }
 
   const pageFields = pageData.fields?.filter((f) => f.page_number === currentPage) || []
-  const editableFields = pageFields.filter((f) => pageData.editable_field_ids?.includes(f.id))
+  
+  // ✅ NEW: Separate static prefilled from editable fields
+  const editablePageFields = pageFields.filter((f) => {
+    // Static prefilled fields are never editable
+    if (f.field_type === 'prefilled_text' && !f.is_editable_prefill) {
+      return true  // Show for display but not editing
+    }
+    return pageData.editable_field_ids?.includes(f.id)
+  })
 
-  // ✅ NEW: Live preview overlay layer
+  // ✅ NEW: Live field preview overlay
   const LiveFieldPreview = ({ field, pageWidth = 612, pageHeight = 792, scale = 1 }) => {
+    if (!field || !pageData.editable_field_ids?.includes(field.id)) {
+      return null
+    }
+
     const value = fieldValues[field.id] || ''
+    const x = field.x_pct * pageWidth * scale
+    const y = field.y_pct * pageHeight * scale
+    const width = field.width_pct * pageWidth * scale
+    const height = field.height_pct * pageHeight * scale
     const info = getFieldDisplayInfo(field.field_type)
-    
+
     return (
       <div
-        className="absolute border-2 border-green-400 bg-green-50 bg-opacity-60 flex items-center justify-center overflow-hidden"
+        className={`absolute border-2 rounded ${info.borderColor} ${info.color} bg-opacity-30 p-2 overflow-hidden flex items-center justify-center`}
         style={{
-          left: `${field.x_pct * 100}%`,
-          top: `${field.y_pct * 100}%`,
-          width: `${field.width_pct * 100}%`,
-          height: `${field.height_pct * 100}%`,
-          zIndex: 15,
+          left: x,
+          top: y,
+          width,
+          height,
+          zIndex: 5,
+          pointerEvents: 'none',
         }}
-        title={`${field.label}: ${value || '(empty)'}`}
       >
-        <div className="text-center pointer-events-none w-full h-full flex flex-col items-center justify-center p-1">
-          {field.field_type === 'signature' ? (
-            <div className="text-center w-full">
-              <div className="text-xs text-green-700 font-bold italic whitespace-nowrap overflow-hidden text-ellipsis">
-                {value || '(signature)'}
-              </div>
-            </div>
-          ) : field.field_type === 'date' ? (
-            <div className="text-xs text-green-700 font-bold whitespace-nowrap">
-              {value || '(date)'}
-            </div>
-          ) : field.field_type === 'checkbox' ? (
-            <div className="text-lg text-green-700 font-bold">
-              {value === 'true' ? '☑️' : '☐'}
-            </div>
-          ) : (
-            <div className="text-xs text-green-700 font-bold whitespace-nowrap overflow-hidden text-ellipsis w-full px-1">
-              {value || '(text)'}
-            </div>
-          )}
-        </div>
+        <span className="text-xs text-gray-700 text-center line-clamp-2">
+          {value || `[${field.label}]`}
+        </span>
       </div>
     )
   }
 
-  return (
-    <div className="flex h-screen bg-gray-50">
-      {/* PDF Viewer */}
-      <div className="flex-1 overflow-hidden flex flex-col relative bg-gray-100">
-        {!absoluteFileUrl ? (
-          <div className="flex-1 flex items-center justify-center bg-gray-100">
-            <div className="text-center bg-white p-8 rounded-lg border-2 border-red-300">
-              <p className="text-6xl mb-4">❌</p>
-              <p className="text-gray-600 font-medium">No document file found</p>
-              <p className="text-sm text-gray-500 mt-2">File URL: {fileUrl}</p>
-            </div>
-          </div>
-        ) : (
-          <DocumentViewer 
-            fileUrl={absoluteFileUrl} 
-            currentPage={currentPage} 
-            onPageChange={setCurrentPage}
-            onLoadSuccess={() => {
-              console.log('✅ PDF loaded successfully in SigningForm')
-            }}
-            onError={(err) => {
-              console.error('❌ DocumentViewer error:', err)
-              setDocumentViewerError(err)
-            }}
+  // ✅ UPDATED: Render field inputs with prefilled_text support
+  const renderFieldInput = (field, value, onChange) => {
+    const info = getFieldDisplayInfo(field.field_type)
+
+    // ✅ NEW: Handle prefilled_text fields
+    if (field.field_type === 'prefilled_text') {
+      if (!field.is_editable_prefill) {
+        // Static: Read-only display
+        return (
+          <div
+            className="px-4 py-3 bg-gray-50 border-2 border-gray-300 rounded-lg text-gray-700 text-sm font-medium"
+            title="This text is static and cannot be edited"
           >
-            {(pageNum, scale) => (
-              <PageLayer
-                pageWidth={612}
-                pageHeight={792}
-                fields={pageFields}
-                selectedFieldId={null}
-                scale={scale}
-              >
-                {/* ✅ NEW: Live preview of filled values */}
-                {editableFields.map((field) => (
-                  <LiveFieldPreview key={`preview-${field.id}`} field={field} scale={scale} />
-                ))}
-              </PageLayer>
-            )}
-          </DocumentViewer>
-        )}
-
-        {documentViewerError && (
-          <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-6 rounded-lg border-2 border-red-400 max-w-md">
-              <p className="text-red-600 font-bold mb-2">PDF Loading Error</p>
-              <p className="text-sm text-gray-700">{documentViewerError.message || 'Failed to load PDF'}</p>
-              <p className="text-xs text-gray-500 mt-3 font-mono break-all">{absoluteFileUrl}</p>
-            </div>
+            {field.prefill_value || '(empty)'}
           </div>
-        )}
-      </div>
+        )
+      } else {
+        // Editable: Text input with prefill
+        return (
+          <textarea
+            value={value}
+            onChange={(e) => onChange(field.id, e.target.value)}
+            placeholder={field.prefill_value || 'Enter text...'}
+            rows={3}
+            className="w-full px-4 py-2.5 border-2 border-teal-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 disabled:bg-gray-100"
+            disabled={!pageData.editable_field_ids?.includes(field.id)}
+          />
+        )
+      }
+    }
 
-      {/* Right Sidebar - Signing Form */}
-      <div className="w-96 bg-white border-l border-gray-200 overflow-y-auto p-6 shadow-lg flex flex-col">
-        <h3 className="text-xl font-bold text-gray-900 mb-2">Sign Document</h3>
-        <p className="text-xs text-gray-600 mb-6">
-          Fill out the required fields below and sign
-        </p>
+    // Standard field types
+    switch (field.field_type) {
+      case 'text':
+        return (
+          <textarea
+            value={value}
+            onChange={(e) => onChange(field.id, e.target.value)}
+            placeholder="Enter text..."
+            rows={3}
+            className="w-full px-4 py-2.5 border-2 border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={!pageData.editable_field_ids?.includes(field.id)}
+          />
+        )
 
-        <div className="flex-1 space-y-6 overflow-y-auto">
-          {/* Signer Name */}
-          <div>
-            <label className="block text-sm font-bold text-gray-900 mb-2">
-              Your Name <span className="text-red-500">*</span>
-            </label>
+      case 'date':
+        return (
+          <input
+            type="date"
+            value={value}
+            onChange={(e) => onChange(field.id, e.target.value)}
+            className="w-full px-4 py-2.5 border-2 border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            disabled={!pageData.editable_field_ids?.includes(field.id)}
+          />
+        )
+
+      case 'signature':
+        return (
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(field.id, e.target.value)}
+            placeholder="Type your signature name..."
+            className="w-full px-4 py-2.5 border-2 border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+            disabled={!pageData.editable_field_ids?.includes(field.id)}
+          />
+        )
+
+      case 'checkbox':
+        return (
+          <label className="flex items-center gap-3 cursor-pointer p-3 border-2 border-orange-300 rounded-lg hover:bg-orange-50">
             <input
-              type="text"
-              value={signerName}
-              onChange={(e) => setSignerName(e.target.value)}
-              placeholder="Enter your full name"
-              className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-              disabled={submitting}
+              type="checkbox"
+              checked={value === 'true' || value === true}
+              onChange={(e) => onChange(field.id, e.target.checked ? 'true' : 'false')}
+              className="w-5 h-5"
+              disabled={!pageData.editable_field_ids?.includes(field.id)}
             />
-          </div>
+            <span className="font-medium text-gray-900">{field.label}</span>
+          </label>
+        )
 
-          {/* Editable Fields */}
-          {editableFields.length > 0 && (
-            <div>
-              <label className="block text-sm font-bold text-gray-900 mb-3">
-                <span>Fields to Sign</span>
-                <span className="text-xs text-gray-500 font-normal ml-2">(live preview on left)</span>
-              </label>
-              <div className="space-y-4 bg-blue-50 p-4 rounded-lg border-2 border-blue-200">
-                {editableFields.map((field) => (
-                  <div key={field.id}>
-                    <label className="text-xs font-bold text-gray-900 uppercase tracking-wide mb-2 flex justify-between items-center">
-                      <span>
-                        {field.label}
-                        {field.required && <span className="text-red-500 ml-1">*</span>}
-                      </span>
-                      {fieldValues[field.id] && (
-                        <span className="text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded font-semibold">✓ filled</span>
-                      )}
-                    </label>
-                    
-                    {field.field_type === 'date' ? (
-                      <input
-                        type="date"
-                        value={fieldValues[field.id] || ''}
-                        onChange={(e) => handleFieldChange(field.id, e.target.value)}
-                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition"
-                        disabled={submitting}
-                      />
-                    ) : field.field_type === 'checkbox' ? (
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={fieldValues[field.id] === 'true'}
-                          onChange={(e) => handleFieldChange(field.id, e.target.checked ? 'true' : 'false')}
-                          className="w-5 h-5 text-blue-600 rounded border-2 border-gray-300 focus:ring-2 focus:ring-blue-500"
-                          disabled={submitting}
-                        />
-                        <span className="text-sm text-gray-700">I agree</span>
-                      </label>
-                    ) : field.field_type === 'signature' ? (
-                      <div className="border-2 border-dashed border-blue-400 rounded-lg p-3 bg-white">
-                        <input
-                          type="text"
-                          value={fieldValues[field.id] || ''}
-                          onChange={(e) => handleFieldChange(field.id, e.target.value)}
-                          placeholder="Type your signature"
-                          className="w-full px-2 py-1 border border-gray-300 rounded text-sm font-italic focus:outline-none focus:ring-2 focus:ring-blue-400"
-                          disabled={submitting}
-                        />
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={fieldValues[field.id] || ''}
-                        onChange={(e) => handleFieldChange(field.id, e.target.value)}
-                        placeholder={`Enter ${field.label.toLowerCase()}`}
-                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm transition"
-                        disabled={submitting}
-                      />
-                    )}
-                  </div>
-                ))}
+      case 'initials':
+        return (
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(field.id, e.target.value.slice(0, 3))}
+            placeholder="Initials (max 3)"
+            maxLength="3"
+            className="w-full px-4 py-2.5 border-2 border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-center font-bold text-lg"
+            disabled={!pageData.editable_field_ids?.includes(field.id)}
+          />
+        )
+
+      default:
+        return <div className="text-red-600 text-sm">Unsupported field type: {field.field_type}</div>
+    }
+  }
+
+  return (
+    <div className="flex h-screen bg-gray-100 overflow-hidden">
+      {/* Left: PDF Viewer */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Info Bar */}
+        <div className="flex-shrink-0 bg-blue-50 border-b-2 border-blue-300 p-4">
+          <p className="text-sm text-blue-900 font-semibold">
+            📄 Please review and sign this document below
+          </p>
+        </div>
+
+        {/* PDF Viewer */}
+        <div className="flex-1 overflow-auto">
+          {documentViewerError ? (
+            <div className="flex items-center justify-center h-full bg-red-50">
+              <div className="text-center">
+                <p className="text-6xl mb-4">❌</p>
+                <p className="text-red-600 font-bold">Failed to load PDF</p>
+                <p className="text-sm text-gray-600 mt-2">{documentViewerError}</p>
               </div>
             </div>
+          ) : (
+            <DocumentViewer
+              fileUrl={absoluteFileUrl}
+              currentPage={currentPage}
+              onPageChange={setCurrentPage}
+              onError={setDocumentViewerError}
+            >
+              {(pageNum, scale) => (
+                <PageLayer
+                  pageWidth={612}
+                  pageHeight={792}
+                  fields={pageFields}
+                  scale={scale}
+                >
+                  {/* Live preview of filled values */}
+                  {editablePageFields.map((field) => (
+                    <LiveFieldPreview
+                      key={`preview-${field.id}`}
+                      field={field}
+                      pageWidth={612}
+                      pageHeight={792}
+                      scale={scale}
+                    />
+                  ))}
+                </PageLayer>
+              )}
+            </DocumentViewer>
           )}
+        </div>
+      </div>
 
-          {editableFields.length === 0 && (
-            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4 text-center">
-              <p className="text-sm text-yellow-800 font-semibold">No fields to sign on this page</p>
+      {/* Right Sidebar: Form */}
+      <div className="w-96 bg-white border-l-2 border-gray-200 overflow-y-auto p-6 shadow-lg flex flex-col">
+        {/* Header */}
+        <div className="flex-shrink-0 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Sign Document</h2>
+          <p className="text-sm text-gray-600">
+            Fill in all required fields marked with <span className="text-red-500 font-bold">*</span>
+          </p>
+        </div>
+
+        {/* Signer Name */}
+        <div className="flex-shrink-0 mb-6">
+          <label className="block text-sm font-bold text-gray-900 mb-2">
+            Your Name <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={signerName}
+            onChange={(e) => setSignerName(e.target.value)}
+            placeholder="Enter your full name"
+            className="w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            disabled={submitting}
+          />
+        </div>
+
+        {/* Form Fields - Scrollable */}
+        <div className="flex-1 overflow-y-auto space-y-6 mb-6">
+          {editablePageFields.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <p className="text-sm">No fields to fill on this page</p>
             </div>
+          ) : (
+            editablePageFields.map((field) => (
+              <div key={field.id} className="space-y-2">
+                <label className="block text-sm font-bold text-gray-900 flex items-center gap-2">
+                  <span>{getFieldDisplayInfo(field.field_type).icon}</span>
+                  <span>{field.label}</span>
+                  {field.required && <span className="text-red-500">*</span>}
+                </label>
+                {renderFieldInput(field, fieldValues[field.id] || '', handleFieldChange)}
+              </div>
+            ))
           )}
         </div>
 
         {/* Submit Button */}
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <Button 
-            onClick={handleSubmit} 
-            variant="primary" 
-            className="w-full" 
+        <div className="flex-shrink-0 space-y-3 border-t-2 border-gray-200 pt-6">
+          <Button
+            variant="primary"
+            size="lg"
+            onClick={handleSubmit}
             disabled={submitting || !signerName.trim()}
+            className="w-full"
           >
             {submitting ? (
               <>
-                <span className="animate-spin inline-block mr-2">⟳</span>
-                Signing...
+                <span className="animate-spin">⟳</span>
+                Submitting...
               </>
             ) : (
               <>
-                <span className="mr-2">✍️</span>
+                <span>✍️</span>
                 Submit Signature
               </>
             )}
           </Button>
-          {!signerName.trim() && (
-            <p className="text-xs text-gray-500 mt-2 text-center">Enter your name to sign</p>
-          )}
+
+          <p className="text-xs text-gray-600 text-center">
+            By submitting, you agree that this is your legal signature
+          </p>
         </div>
       </div>
     </div>

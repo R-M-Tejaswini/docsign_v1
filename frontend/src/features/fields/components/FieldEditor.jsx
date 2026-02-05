@@ -1,10 +1,12 @@
 //frontend/src/features/fields/components/FieldEditor.jsx
-import { useState, useEffect} from 'react'
+/**
+ * ✅ FIXED: Field editor with proper save handling
+ */
 
-// ✅ FIXED: Import getRecipientBadgeClasses from shared utils
-import { getRecipientBadgeClasses } from '../../../shared/utils/recipientColors'
-import { Button } from '../../../shared/components/ui/Button'
+import { useState, useEffect } from 'react'
 import { Input } from '../../../shared/components/ui/Input'
+import { Button } from '../../../shared/components/ui/Button'
+import { getRecipientBadgeClasses } from '../../../shared/utils/recipientColors'
 
 export const FieldEditor = ({ 
   field, 
@@ -21,11 +23,20 @@ export const FieldEditor = ({
   const [showRecipientList, setShowRecipientList] = useState(false)
   const [localRecipients, setLocalRecipients] = useState(allRecipients)
 
+  // ✅ Prefilled text fields
+  const [prefillValue, setPrefillValue] = useState(field?.prefill_value || '')
+  const [isEditablePrefill, setIsEditablePrefill] = useState(field?.is_editable_prefill ?? false)
+  
+  // ✅ ADD: Loading state
+  const [isSaving, setIsSaving] = useState(false)
+
   useEffect(() => {
     if (field) {
-      setLabel(field.label)
-      setRequired(field.required)
+      setLabel(field.label || '')
+      setRequired(field.required ?? true)
       setRecipient(field.recipient || '')
+      setPrefillValue(field.prefill_value || '')
+      setIsEditablePrefill(field.is_editable_prefill ?? false)
     }
   }, [field])
 
@@ -33,44 +44,45 @@ export const FieldEditor = ({
     setLocalRecipients(allRecipients)
   }, [allRecipients])
 
-  const handleSave = () => {
+  // ✅ FIXED: Proper save handler
+  const handleSave = async () => {
     if (!label.trim()) {
       alert('Label is required')
       return
     }
-    
-    if (!recipient.trim()) {
-      alert('Please assign a recipient')
-      return
-    }
 
-    onUpdate?.({
-      ...field,
-      label: label.trim(),
-      required,
-      recipient: recipient.trim(),
-    })
+    setIsSaving(true)
+    try {
+      const updates = {
+        id: field.id,  // ✅ CRITICAL: Include field ID
+        label: label.trim(),
+        required,
+        recipient: isEditablePrefill ? recipient : (recipient || null),  // Optional for static
+        prefill_value: field?.field_type === 'prefilled_text' ? prefillValue : undefined,
+        is_editable_prefill: field?.field_type === 'prefilled_text' ? isEditablePrefill : false,
+      }
+      
+      console.log('📝 Saving field updates:', updates)
+      
+      // ✅ Call onUpdate with the updates
+      await onUpdate(updates)
+      
+      console.log('✅ Field saved successfully')
+    } catch (error) {
+      console.error('❌ Error saving field:', error)
+      alert(`Failed to save field: ${error.message}`)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleAddNewRecipient = () => {
-    if (!newRecipientInput.trim()) {
-      alert('Please enter a recipient name')
-      return
-    }
-    
-    const newRecipient = newRecipientInput.trim()
-    
-    if (localRecipients.includes(newRecipient)) {
-      alert('This recipient already exists')
+    if (newRecipientInput.trim()) {
+      setLocalRecipients([...localRecipients, newRecipientInput])
+      setRecipient(newRecipientInput)
       setNewRecipientInput('')
-      return
+      setShowNewRecipientInput(false)
     }
-    
-    const updatedRecipients = [...localRecipients, newRecipient].sort()
-    setLocalRecipients(updatedRecipients)
-    setRecipient(newRecipient)
-    setNewRecipientInput('')
-    setShowNewRecipientInput(false)
   }
 
   const handleSelectRecipient = (selectedRecipient) => {
@@ -80,185 +92,192 @@ export const FieldEditor = ({
 
   if (!field) {
     return (
-      <div className="bg-gradient-to-br from-gray-50 to-gray-100 border-2 border-dashed border-gray-300 rounded-xl p-8">
-        <div className="text-center">
-          <div className="text-5xl mb-4">👆</div>
-          <p className="text-gray-600 font-medium">
-            Select a field to edit its properties
-          </p>
-        </div>
+      <div className="text-center py-8 text-gray-500">
+        <p className="text-sm">Select a field to edit</p>
       </div>
     )
   }
 
+  const isPrefilled = field.field_type === 'prefilled_text'
+
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-6 space-y-5 shadow-sm">
-      <div className="border-b border-gray-200 pb-3">
-        <h3 className="text-xl font-bold text-gray-900">Field Properties</h3>
-        <p className="text-xs text-gray-600 mt-1">Configure field settings and assignment</p>
-      </div>
+    <div className="space-y-4">
+      {/* Field Label */}
+      <Input
+        label="Field Label"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        placeholder="e.g., Signature, Date, etc."
+        disabled={!canEdit || isSaving}
+      />
 
-      {/* Field Type Display */}
-      <div>
-        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
-          Field Type
-        </label>
-        <div className="px-4 py-3 bg-gradient-to-r from-gray-100 to-gray-50 rounded-lg text-sm font-semibold text-gray-900 capitalize border border-gray-200">
-          {field.field_type}
+      {/* ✅ Prefilled Text Fields */}
+      {isPrefilled && (
+        <div className="space-y-4 p-4 bg-teal-50 border-2 border-teal-200 rounded-lg">
+          <h4 className="text-sm font-bold text-teal-900">Prefilled Text Settings</h4>
+          
+          {/* Prefill Value */}
+          <div>
+            <label className="block text-sm font-bold text-gray-900 mb-2">
+              Default Text Value
+            </label>
+            <textarea
+              value={prefillValue}
+              onChange={(e) => setPrefillValue(e.target.value)}
+              placeholder="Enter the text that will appear in this field..."
+              rows={3}
+              disabled={!canEdit || isSaving}
+              className={`
+                w-full px-4 py-2.5 border-2 border-teal-300 rounded-lg
+                focus:outline-none focus:ring-2 focus:ring-teal-500
+                disabled:bg-gray-100 disabled:cursor-not-allowed
+              `}
+            />
+          </div>
+
+          {/* Editable Toggle */}
+          <div className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              id="isEditablePrefill"
+              checked={isEditablePrefill}
+              onChange={(e) => setIsEditablePrefill(e.target.checked)}
+              disabled={!canEdit || isSaving}
+              className="w-4 h-4 rounded"
+            />
+            <label htmlFor="isEditablePrefill" className="text-sm font-semibold text-gray-900">
+              Allow recipient to edit this text
+            </label>
+          </div>
+
+          {/* Mode Description */}
+          <div className="text-xs text-teal-800 bg-white border border-teal-200 p-2 rounded">
+            {isEditablePrefill ? (
+              <p>
+                <strong>Editable Mode:</strong> Text is pre-filled but the recipient can modify it during signing.
+              </p>
+            ) : (
+              <p>
+                <strong>Static Mode:</strong> Text is permanently set and cannot be changed. It will be rendered 
+                directly on the PDF when the document is locked.
+              </p>
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Label Input */}
-      <div>
-        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
-          Label <span className="text-red-500">*</span>
-        </label>
-        <input
-          type="text"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          disabled={!canEdit}
-          placeholder="e.g., Full Name, Signature, Date Signed"
-          className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed text-sm font-medium"
-        />
-      </div>
+      )}
 
       {/* Recipient Selector */}
-      <div>
-        <label className="block text-xs font-bold text-gray-600 uppercase mb-2 tracking-wide">
-          Assigned Recipient <span className="text-red-500">*</span>
+      <div className="space-y-2">
+        <label className="block text-sm font-bold text-gray-900">
+          Recipient
+          {isPrefilled && !isEditablePrefill ? (
+            <span className="text-xs text-gray-600 font-normal ml-1">(Optional for static)</span>
+          ) : (
+            <span className="text-red-500 ml-1">*</span>
+          )}
         </label>
-        
-        {/* Current Recipient Badge */}
-        {recipient && (
-          <div className="mb-3">
-            <span className={`${getRecipientBadgeClasses(recipient, localRecipients)} shadow-sm`}>
-              {recipient}
-            </span>
-          </div>
-        )}
 
-        {/* Recipient Dropdown */}
         <div className="relative">
-          <button
+          <input
+            type="text"
+            value={recipient}
+            onChange={(e) => setRecipient(e.target.value)}
             onClick={() => setShowRecipientList(!showRecipientList)}
-            disabled={!canEdit}
-            className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-lg hover:border-gray-400 disabled:bg-gray-100 disabled:cursor-not-allowed text-left text-gray-700 font-semibold transition-all flex justify-between items-center shadow-sm"
-          >
-            <span>{recipient || 'Select recipient...'}</span>
-            <span className="text-gray-500">{showRecipientList ? '▲' : '▼'}</span>
-          </button>
+            disabled={!canEdit || isSaving || (isPrefilled && !isEditablePrefill)}
+            placeholder="Select or type a recipient..."
+            className={`
+              w-full px-4 py-2.5 border-2 border-gray-300 rounded-lg
+              focus:outline-none focus:ring-2 focus:ring-blue-500
+              ${!canEdit || isSaving || (isPrefilled && !isEditablePrefill) ? 'bg-gray-100 cursor-not-allowed' : 'bg-white'}
+            `}
+          />
 
-          {showRecipientList && canEdit && (
-            <div className="absolute top-full left-0 right-0 mt-2 bg-white border-2 border-gray-300 rounded-lg shadow-xl z-20 max-h-56 overflow-y-auto">
-              {/* Existing Recipients */}
+          {/* Recipient Dropdown */}
+          {showRecipientList && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-white border-2 border-gray-300 rounded-lg shadow-lg z-10 max-h-40 overflow-y-auto">
               {localRecipients.map((r) => (
                 <button
                   key={r}
                   onClick={() => handleSelectRecipient(r)}
-                  className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-blue-50 transition-colors ${
-                    recipient === r ? 'bg-blue-100 font-bold' : ''
+                  className={`w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 ${
+                    recipient === r ? 'bg-blue-100' : ''
                   }`}
+                  type="button"
                 >
-                  <span className={getRecipientBadgeClasses(r, localRecipients)}>
+                  <span className="text-xs px-2 py-1 rounded bg-blue-100 text-blue-800">
                     {r}
                   </span>
                 </button>
               ))}
-              
-              {/* Add New Recipient Button */}
-              <button
-                onClick={() => {
-                  setShowNewRecipientInput(true)
-                  setShowRecipientList(false)
-                }}
-                className="w-full text-left px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 text-blue-700 font-bold transition-colors border-t-2 border-blue-200 flex items-center gap-2"
-              >
-                <span className="text-xl">➕</span>
-                <span>Add New Recipient</span>
-              </button>
+              <div className="border-t border-gray-200 p-2">
+                {!showNewRecipientInput ? (
+                  <button
+                    onClick={() => setShowNewRecipientInput(true)}
+                    className="w-full text-left text-xs text-blue-600 hover:text-blue-800 font-semibold py-1"
+                    type="button"
+                  >
+                    ➕ Add new recipient
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newRecipientInput}
+                      onChange={(e) => setNewRecipientInput(e.target.value)}
+                      placeholder="New recipient..."
+                      autoFocus
+                      className="flex-1 text-xs px-2 py-1 border border-gray-300 rounded"
+                    />
+                    <button
+                      onClick={handleAddNewRecipient}
+                      className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                      type="button"
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
-
-        {/* Add New Recipient Input */}
-        {showNewRecipientInput && canEdit && (
-          <div className="mt-3 p-4 bg-blue-50 border-2 border-blue-200 rounded-lg">
-            <label className="block text-xs font-bold text-blue-900 uppercase mb-2">
-              New Recipient Name
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newRecipientInput}
-                onChange={(e) => setNewRecipientInput(e.target.value)}
-                placeholder="e.g., Recipient 2, Manager, etc."
-                className="flex-1 px-3 py-2 border-2 border-blue-300 rounded-lg focus:border-blue-500 text-sm font-medium"
-                onKeyPress={(e) => e.key === 'Enter' && handleAddNewRecipient()}
-                autoFocus
-              />
-              <Button
-                onClick={handleAddNewRecipient}
-                variant="primary"
-                size="sm"
-              >
-                Add
-              </Button>
-              <Button
-                onClick={() => {
-                  setShowNewRecipientInput(false)
-                  setNewRecipientInput('')
-                }}
-                variant="secondary"
-                size="sm"
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Divider */}
-      <div className="border-t border-gray-200"></div>
-
-      {/* Required Toggle */}
-      <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-lg p-4 border-2 border-gray-200">
-        <label className="flex items-center gap-3 cursor-pointer group">
+      {/* Required Checkbox - Hidden for static prefilled fields */}
+      {!(isPrefilled && !isEditablePrefill) && (
+        <label className="flex items-center gap-2">
           <input
             type="checkbox"
             checked={required}
             onChange={(e) => setRequired(e.target.checked)}
-            disabled={!canEdit}
-            className="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed border-2 border-gray-400"
+            disabled={!canEdit || isSaving}
+            className="w-4 h-4"
           />
-          <div className="flex-1">
-            <span className="text-sm font-bold text-gray-900 block">
-              Required Field
-            </span>
-            <span className="text-xs text-gray-600">
-              Recipient must fill this field before submitting
-            </span>
-          </div>
-          {required && (
-            <span className="text-red-500 text-xl">*</span>
-          )}
+          <span className="text-sm font-semibold text-gray-900">
+            This field is required
+          </span>
         </label>
-      </div>
+      )}
 
       {/* Action Buttons */}
-      {canEdit && (
-        <div className="space-y-2 pt-4 border-t border-gray-200">
-          <Button onClick={handleSave} variant="primary" className="w-full">
-            <span>✓</span>
-            Save Changes
-          </Button>
-          <Button onClick={onDelete} variant="danger" className="w-full">
-            <span>🗑️</span>
-            Delete Field
-          </Button>
-        </div>
-      )}
+      <div className="flex gap-2 pt-4 border-t border-gray-200">
+        <button
+          onClick={handleSave}
+          disabled={!canEdit || !label.trim() || isSaving}
+          className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+        >
+          {isSaving ? '💾 Saving...' : '💾 Save'}
+        </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            disabled={!canEdit || isSaving}
+            className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          >
+            🗑️ Delete
+          </button>
+        )}
+      </div>
     </div>
   )
 }

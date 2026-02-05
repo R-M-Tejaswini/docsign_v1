@@ -13,25 +13,42 @@ class TemplateFieldSerializer(serializers.ModelSerializer):
         model = TemplateField
         fields = [
             'id', 'field_type', 'label', 'recipient', 'page_number',
-            'x_pct', 'y_pct', 'width_pct', 'height_pct', 'required', 'template'
+            'x_pct', 'y_pct', 'width_pct', 'height_pct', 'required',
+            'prefill_value', 'is_editable_prefill',
+            'template',  # ✅ CRITICAL: Must be in fields
+            'created_at', 'updated_at'  # ✅ Add timestamps
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'created_at', 'updated_at']  # ✅ Template is writable on create
+    
+    def validate(self, data):
+        """✅ UPDATED: Validate prefilled_text specific rules."""
+        field_type = data.get('field_type')
+        recipient = data.get('recipient')
+        is_editable = data.get('is_editable_prefill', False)
+        prefill_value = data.get('prefill_value', '')  # ✅ Default to empty string
+        
+        # ✅ Prefilled text validation
+        if field_type == 'prefilled_text':
+            # Static prefilled: recipient optional, prefill_value optional on create (user can edit)
+            if is_editable and not recipient:
+                raise serializers.ValidationError(
+                    {'recipient': 'Editable prefilled fields must have a recipient'}
+                )
+            
+            # ✅ FIXED: For static prefilled on creation, allow empty prefill_value
+            # User will fill it in the editor
+        
+        # ✅ For non-prefilled types, clear these fields
+        if field_type != 'prefilled_text':
+            data['prefill_value'] = None
+            data['is_editable_prefill'] = False
+        
+        return data
     
     def validate_recipient(self, value):
-        """Ensure recipient is not empty."""
-        if not value or not value.strip():
-            raise serializers.ValidationError('Recipient must be specified')
-        return value.strip()
-    
-    def validate_template(self, value):
-        """✅ FIXED: Ensure template exists and is valid."""
-        if not value:
-            raise serializers.ValidationError('Template is required')
-        if not isinstance(value, Template):
-            try:
-                value = Template.objects.get(pk=value)
-            except Template.DoesNotExist:
-                raise serializers.ValidationError('Template not found')
+        """Ensure recipient is not empty string (allow None)."""
+        if value == '':  # Empty string not allowed
+            return None
         return value
     
     def validate_page_number(self, value):

@@ -125,28 +125,26 @@ class TemplateViewSet(viewsets.ModelViewSet):
         """✅ FIXED: Create a new field on this template."""
         template = self.get_object()
         
-        # ✅ FIXED: Don't manipulate data, let serializer handle it
+        # ✅ CRITICAL: Always set template_id from URL parameter
         data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-        data['template'] = template.id
+        data['template'] = template.id  # ✅ Set the template FK
         
         serializer = TemplateFieldSerializer(data=data)
         
         if not serializer.is_valid():
-            print(f"❌ Field validation errors: {serializer.errors}")
             return Response(
-                serializer.errors,
+                {'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
         try:
             field = serializer.save()
-            print(f"✅ Field created: {field.id} on template {template.id}")
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
+            return Response(
+                TemplateFieldSerializer(field).data,
+                status=status.HTTP_201_CREATED
+            )
         except Exception as e:
-            import traceback
             print(f"❌ Field creation error: {e}")
-            traceback.print_exc()
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST

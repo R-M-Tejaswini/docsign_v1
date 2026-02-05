@@ -129,6 +129,14 @@ class PDFCoordinateConverter:
         return max(min_size, min(font_size, max_size))
 
 
+"""
+✅ UPDATED: Render static prefilled text onto PDF during flattening
+"""
+
+from reportlab.pdfgen import canvas
+from reportlab.lib.colors import HexColor
+
+
 class PDFOverlayRenderer:
     """Render field overlays onto a PDF canvas."""
     
@@ -140,9 +148,19 @@ class PDFOverlayRenderer:
         self.font_manager = PDFFontManager()
     
     def render_field(self, canvas_obj, field) -> None:
-        """Render a single field onto the canvas."""
-        if not field.value or (isinstance(field.value, str) and field.value.strip() == ''):
-            return
+        """✅ UPDATED: Render a single field onto the canvas."""
+        
+        # ✅ NEW: Handle static prefilled text fields
+        if field.field_type == 'prefilled_text' and not field.is_editable_prefill:
+            # Static prefilled: always render from prefill_value
+            if not field.prefill_value or field.prefill_value.strip() == '':
+                return
+            value_to_render = field.prefill_value
+        else:
+            # For all other fields, use the field.value (or skip if empty)
+            if not field.value or (isinstance(field.value, str) and field.value.strip() == ''):
+                return
+            value_to_render = field.value
         
         x = field.x_pct * self.PAGE_WIDTH
         pdf_y_bottom, pdf_y_top = self.converter.ui_to_pdf(
@@ -153,104 +171,47 @@ class PDFOverlayRenderer:
         height = field.height_pct * self.PAGE_HEIGHT
         
         font_size = self.converter.compute_font_size(
-            field.height_pct, 
+            field.height_pct,
             self.PAGE_HEIGHT,
             field.field_type
         )
         
         try:
-            if field.field_type == 'signature':
-                self._render_signature(canvas_obj, field, x, pdf_y_bottom, 
-                                      width, height, font_size)
+            if field.field_type == 'prefilled_text':
+                self._render_prefilled_text(
+                    canvas_obj, field, x, pdf_y_top, width, height,
+                    font_size, value_to_render
+                )
+            elif field.field_type == 'signature':
+                self._render_signature(canvas_obj, field, x, pdf_y_top, width, height, font_size)
             elif field.field_type == 'date':
-                self._render_date(canvas_obj, field, x, pdf_y_bottom, 
-                                 width, height, font_size)
+                self._render_date(canvas_obj, field, x, pdf_y_top, width, height, font_size)
             elif field.field_type == 'checkbox':
-                self._render_checkbox(canvas_obj, field, x, pdf_y_bottom, 
-                                     width, height, font_size)
+                self._render_checkbox(canvas_obj, field, x, pdf_y_top, width, height, font_size)
             elif field.field_type == 'text':
-                self._render_text(canvas_obj, field, x, pdf_y_bottom, 
-                                 width, height, font_size)
+                self._render_text(canvas_obj, field, x, pdf_y_top, width, height, font_size)
         except Exception as e:
-            print(f"⚠️  Error rendering field {field.id} ({field.field_type}): {e}")
+            print(f"⚠️ Error rendering field {field.label}: {e}")
     
-    def _render_signature(self, canvas_obj, field, x: float, y: float, 
-                         width: float, height: float, font_size: int) -> None:
-        """Render signature text with handwriting-style font."""
-        font = self.font_manager.get_font_for_field('signature')
-        
-        # Use larger font size for signatures
-        font_size = max(16, min(font_size, 32))
-        
-        try:
-            canvas_obj.setFont(font, font_size)
-        except KeyError:
-            print(f"⚠️  Font '{font}' not available, using Helvetica-Oblique")
-            canvas_obj.setFont('Helvetica-Oblique', font_size)
-            font = 'Helvetica-Oblique'
-        
+    def _render_prefilled_text(self, canvas_obj, field, x: float, y: float,
+                              width: float, height: float, font_size: int,
+                              text_value: str) -> None:
+        """✅ NEW: Render prefilled text field."""
+        canvas_obj.setFont('Helvetica', min(font_size, 10))
         canvas_obj.setFillColor(HexColor('#1a1a1a'))  # Dark gray/black
         
-        # Better vertical centering
-        text_y = y + (height * 0.2)
-        text_value = str(field.value).strip()[:50]
+        # Light background for visual distinction
+        canvas_obj.setFillColor(HexColor('#f5f5f5'))
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=0)
         
-        if not text_value:
-            return
-        
-        try:
-            print(f"🖊️  Rendering signature: font='{font}', size={font_size}, text='{text_value[:20]}...'")
-            canvas_obj.drawString(x + 4, text_y, text_value)
-            print(f"✅ Signature rendered successfully with {font}")
-        except Exception as e:
-            print(f"❌ Failed to render signature: {type(e).__name__}: {e}")
-            # Last resort fallback
-            try:
-                canvas_obj.setFont('Helvetica-Bold', min(font_size, 16))
-                canvas_obj.drawString(x + 4, text_y, text_value)
-                print(f"✅ Signature rendered with Helvetica-Bold fallback")
-            except Exception as e2:
-                print(f"❌ Complete failure to render signature: {e2}")
-    
-    def _render_date(self, canvas_obj, field, x: float, y: float, 
-                    width: float, height: float, font_size: int) -> None:
-        """Render date field."""
-        canvas_obj.setFont('Helvetica', min(font_size, 10))
-        canvas_obj.setFillColor(HexColor('#000000'))
-        
-        date_str = str(field.value)[:20]
+        # Draw text
+        canvas_obj.setFillColor(HexColor('#1a1a1a'))
         text_y = y + (height * 0.15)
-        canvas_obj.drawString(x + 2, text_y, date_str)
-    
-    def _render_checkbox(self, canvas_obj, field, x: float, y: float, 
-                        width: float, height: float, font_size: int) -> None:
-        """Render checkbox (draw checkmark if checked)."""
-        value_str = str(field.value).lower()
-        is_checked = value_str in ['true', '1', 'yes', 'checked']
         
-        if is_checked:
-            canvas_obj.setFont('Helvetica-Bold', min(font_size, 14))
-            canvas_obj.setFillColor(HexColor('#000000'))
-            
-            box_center_x = x + (width / 2)
-            box_center_y = y + (height / 2)
-            
-            canvas_obj.drawString(box_center_x - 2, box_center_y - 3, '✓')
-    
-    def _render_text(self, canvas_obj, field, x: float, y: float, 
-                    width: float, height: float, font_size: int) -> None:
-        """Render text field with wrapping."""
-        canvas_obj.setFont('Helvetica', min(font_size, 10))
-        canvas_obj.setFillColor(HexColor('#000000'))
-        
-        text = str(field.value)
-        chars_per_line = max(1, int(width / (font_size * 0.5)))
-        
-        if len(text) > chars_per_line:
-            text = text[:chars_per_line - 1] + '…'
-        
-        text_y = y + (height * 0.15)
-        canvas_obj.drawString(x + 2, text_y, text)
+        # Simple text rendering (can add wrapping if needed)
+        text_lines = text_value.split('\n')
+        for i, line in enumerate(text_lines[:3]):  # Max 3 lines
+            canvas_obj.drawString(x + 2, text_y - (i * font_size), line[:50])
 
 
 class PDFFlatteningService:

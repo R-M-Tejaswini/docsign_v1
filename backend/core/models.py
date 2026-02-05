@@ -20,10 +20,16 @@ class BaseField(models.Model):
             ('date', 'Date'),
             ('checkbox', 'Checkbox'),
             ('initials', 'Initials'),
+            ('prefilled_text', 'Prefilled Text'),  # ✅ NEW
         ]
     )
     label = models.CharField(max_length=255)
-    recipient = models.CharField(max_length=255, null=True, blank=True)
+    recipient = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Recipient identifier. Optional for static prefilled fields."
+    )
     
     # Position and size (as percentages of page)
     page_number = models.PositiveIntegerField(default=1)
@@ -33,7 +39,6 @@ class BaseField(models.Model):
     y_pct = models.FloatField(
         validators=[MinValueValidator(0), MaxValueValidator(100)]
     )
-    # ✅ FIXED: Allow smaller field dimensions (1% minimum = ~7.6 points on 8.5"x11")
     width_pct = models.FloatField(
         validators=[MinValueValidator(0.01), MaxValueValidator(100)]
     )
@@ -46,11 +51,20 @@ class BaseField(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
+    # ✅ NEW: Prefilled text specific fields
+    prefill_value = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Pre-filled text content for prefilled_text field type"
+    )
+    is_editable_prefill = models.BooleanField(
+        default=False,
+        help_text="If True, prefilled text can be edited by recipient. If False, text is static/read-only."
+    )
+    
     class Meta:
         abstract = True
     
     def save(self, *args, **kwargs):
         """✅ FIXED: Don't call full_clean() - DRF serializer handles validation."""
-        # ✅ Skip full_clean() to avoid validation issues with FK relationships
-        # The serializer will validate before calling save()
         super().save(*args, **kwargs)

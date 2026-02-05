@@ -1,8 +1,6 @@
 //frontend/src/features/documents/pages/DocumentEdit/FieldsTab.jsx
 /**
- * ✅ EXTRACTED: All field management logic
- * ✅ FIXED: Added proper scrollable layout & field editor sidebar
- * ✅ FIXED: Smooth drag-and-resize with proper z-indexing
+ * ✅ UPDATED: FieldsTab with prefilled_text field creation
  */
 
 import { useState, useEffect } from 'react'
@@ -45,7 +43,12 @@ export const FieldsTab = ({ document, onUpdate, addToast }) => {
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
 
-    const defaultRecipient = allRecipients[0] || 'Recipient 1'
+    // ✅ NEW: For static prefilled fields, don't require a recipient
+    const isStaticPrefilled = 
+      addingFieldType === 'prefilled_text' && 
+      !document.fields?.some(f => f.field_type === 'prefilled_text' && f.is_editable_prefill)
+
+    const defaultRecipient = isStaticPrefilled ? null : (allRecipients[0] || 'Recipient 1')
 
     try {
       const newField = await createField({
@@ -57,52 +60,37 @@ export const FieldsTab = ({ document, onUpdate, addToast }) => {
         y_pct: Math.max(0, Math.min(1, y)),
         width_pct: 0.15,
         height_pct: 0.05,
-        required: true,
+        required: addingFieldType === 'prefilled_text' ? false : true,  // ✅ Prefilled not required by default
+        // ✅ NEW: Prefilled text defaults
+        prefill_value: addingFieldType === 'prefilled_text' ? '' : undefined,
+        is_editable_prefill: false,  // Default to static
       })
       setFields([...fields, newField])
       setSelectedFieldId(newField.id)
       setAddingFieldType(null)
-      addToast('Field added - drag to reposition', 'success')
+      addToast('Field added - drag to reposition and edit in sidebar', 'success')
     } catch (err) {
       addToast('Failed to add field', 'error')
+      console.error(err)
     }
   }
 
   const handleUpdateField = async (updatedField) => {
     try {
-      await updateField(updatedField.id, {
-        label: updatedField.label,
-        required: updatedField.required,
-        recipient: updatedField.recipient,
-        x_pct: updatedField.x_pct,
-        y_pct: updatedField.y_pct,
-        width_pct: updatedField.width_pct,
-        height_pct: updatedField.height_pct,
-      })
-      setFields(fields.map((f) => (f.id === updatedField.id ? updatedField : f)))
-      
-      if (updatedField.recipient && !allRecipients.includes(updatedField.recipient)) {
-        setAllRecipients([...allRecipients, updatedField.recipient].sort())
-      }
-      
+      const result = await updateField(updatedField.id, updatedField)
+      setFields(fields.map((f) => (f.id === updatedField.id ? result : f)))
       addToast('Field updated', 'success')
     } catch (err) {
       addToast('Failed to update field', 'error')
+      console.error(err)
     }
   }
 
   const handleDeleteField = async (fieldId) => {
-    if (!window.confirm('Delete this field?')) return
-    
     try {
       await deleteField(fieldId)
-      const updatedFields = fields.filter((f) => f.id !== fieldId)
-      setFields(updatedFields)
+      setFields(fields.filter((f) => f.id !== fieldId))
       setSelectedFieldId(null)
-      
-      const recipients = [...new Set(updatedFields.map(f => f.recipient).filter(Boolean))]
-      setAllRecipients(recipients.sort())
-      
       addToast('Field deleted', 'success')
     } catch (err) {
       addToast('Failed to delete field', 'error')

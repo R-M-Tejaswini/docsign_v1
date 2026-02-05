@@ -1,12 +1,21 @@
 //frontend/src/features/fields/components/FieldPalette.jsx
-import { Button } from '../../../shared/components/ui/Button'
+/**
+ * ✅ UPDATED: Field palette with prefilled_text option
+ */
 
-// ✅ FIXED: Field utilities from same feature
+import { Button } from '../../../shared/components/ui/Button'
 import { FIELD_TYPE_INFO } from '../types'
 import { getFieldDisplayInfo } from '../utils/fieldRules'
 
 export const FieldPalette = ({ onSelectFieldType }) => {
-  const fieldTypes = ['text', 'signature', 'date', 'checkbox']
+  const fieldTypes = [
+    'text', 
+    'signature', 
+    'date', 
+    'checkbox', 
+    'initials',
+    'prefilled_text',  // ✅ NEW
+  ]
 
   return (
     <div className="bg-white border-r border-gray-200 p-5 w-64 shadow-sm">
@@ -18,27 +27,36 @@ export const FieldPalette = ({ onSelectFieldType }) => {
       <div className="space-y-3">
         {fieldTypes.map((type) => {
           const info = getFieldDisplayInfo(type)
+          const descriptions = {
+            text: 'Input field for text',
+            signature: 'Handwritten signature',
+            date: 'Date picker field',
+            checkbox: 'Checkbox selection',
+            initials: 'Initials signature',
+            prefilled_text: 'Static or editable pre-filled text',  // ✅ NEW
+          }
+          
           return (
             <button
               key={type}
               onClick={() => onSelectFieldType(type)}
-              className="w-full text-left px-4 py-3 bg-gradient-to-r from-gray-50 to-gray-100 hover:from-white hover:to-gray-50 rounded-lg text-sm transition-all duration-200 border-2 border-transparent hover:border-gray-300 hover:shadow-md active:scale-95 group"
-              style={{ 
-                borderLeftColor: info.color,
-                borderLeftWidth: '4px'
-              }}
+              className={`
+                w-full text-left px-4 py-3 rounded-lg text-sm transition-all 
+                duration-200 border-2 border-transparent hover:border-gray-300 
+                hover:shadow-md active:scale-95 group
+                ${info.color}
+              `}
             >
               <div className="flex items-center gap-3">
-                <span className="text-2xl group-hover:scale-110 transition-transform">{info.icon}</span>
+                <span className="text-2xl group-hover:scale-110 transition-transform">
+                  {info.icon}
+                </span>
                 <div className="flex-1">
-                  <div className="font-semibold text-gray-900 group-hover:text-gray-700">
+                  <div className={`font-semibold ${info.textColor}`}>
                     {info.label}
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5">
-                    {type === 'text' && 'Input field for text'}
-                    {type === 'signature' && 'Handwritten signature'}
-                    {type === 'date' && 'Date picker field'}
-                    {type === 'checkbox' && 'Checkbox selection'}
+                    {descriptions[type]}
                   </div>
                 </div>
               </div>
@@ -51,7 +69,8 @@ export const FieldPalette = ({ onSelectFieldType }) => {
         <div className="flex items-start gap-2">
           <span className="text-blue-600 text-lg">💡</span>
           <p className="text-xs text-blue-900 leading-relaxed">
-            <strong>Tip:</strong> After clicking a field type, click anywhere on the PDF to place it. Then drag to reposition or resize.
+            <strong>Tip:</strong> After clicking a field type, click anywhere on the 
+            PDF to place it. Then drag to reposition or resize.
           </p>
         </div>
       </div>

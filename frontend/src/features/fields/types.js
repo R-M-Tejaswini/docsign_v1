@@ -1,6 +1,6 @@
 //frontend/src/features/fields/types.js
 /**
- * ✅ CENTRALIZED: Field type definitions
+ * ✅ UPDATED: Field type definitions with prefilled_text
  */
 
 export const FIELD_TYPES = {
@@ -8,6 +8,8 @@ export const FIELD_TYPES = {
   SIGNATURE: 'signature',
   DATE: 'date',
   CHECKBOX: 'checkbox',
+  INITIALS: 'initials',
+  PREFILLED_TEXT: 'prefilled_text',  // ✅ NEW
 }
 
 export const FIELD_TYPE_INFO = {
@@ -34,5 +36,17 @@ export const FIELD_TYPE_INFO = {
     icon: '☑️',
     description: 'Yes/No checkbox field',
     placeholder: 'Check if agreed',
+  },
+  [FIELD_TYPES.INITIALS]: {
+    label: 'Initials',
+    icon: '👤',
+    description: 'Initials field',
+    placeholder: 'Enter initials...',
+  },
+  [FIELD_TYPES.PREFILLED_TEXT]: {
+    label: 'Prefilled Text',
+    icon: '📄',
+    description: 'Static or editable pre-filled text',
+    placeholder: 'Enter default text...',
   },
 }

@@ -1,12 +1,11 @@
 """
 Document business logic service layer.
-
 """
 
 from django.db import models as django_models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from core.services import HashingService  # ← Import from core
+from core.services import HashingService
 
 
 class DocumentService:
@@ -44,11 +43,60 @@ class DocumentService:
         
         return status
     
+    # ✅ NEW: Validate document can be locked
+    @staticmethod
+    def validate_document_for_locking(document):
+        """
+        ✅ FIXED: Check if document is ready to be locked.
+        
+        Rules:
+        - Must have at least one interactive field (text, signature, date, etc.)
+        - Static prefilled fields don't count as interactive
+        - Editable prefilled fields DO count as interactive
+        
+        Returns:
+            (is_valid: bool, error_message: str or None)
+        """
+        all_fields = list(document.fields.all())
+        
+        if not all_fields:
+            return False, "Document must have at least one field before locking"
+        
+        # ✅ NEW: Distinguish static prefilled from interactive fields
+        interactive_fields = [
+            f for f in all_fields
+            if not (
+                f.field_type == 'prefilled_text' and 
+                not f.is_editable_prefill  # Static prefilled = non-interactive
+            )
+        ]
+        
+        if not interactive_fields:
+            return False, (
+                "Document must have at least one interactive field "
+                "(text, signature, date, etc.). "
+                "Static prefilled text fields alone are not sufficient."
+            )
+        
+        # ✅ Check all interactive fields have recipients
+        fields_without_recipients = [
+            f for f in interactive_fields
+            if not f.recipient or not f.recipient.strip()
+        ]
+        
+        if fields_without_recipients:
+            field_labels = ', '.join(f.label for f in fields_without_recipients)
+            return False, (
+                f"The following fields need a recipient assigned: {field_labels}"
+            )
+        
+        return True, None
+    
     @staticmethod
     def can_generate_sign_link(document, recipient):
         """Check if a sign link can be generated for a specific recipient."""
         if document.status == 'draft':
-            return False, "Document must be locked before generating sign links"
+            return False, "Document is still in draft mode"
         
         recipient_fields = document.fields.filter(recipient=recipient)
         if not recipient_fields.exists():
@@ -56,7 +104,7 @@ class DocumentService:
         
         recipient_status = DocumentService.get_recipient_status(document)
         if recipient in recipient_status and recipient_status[recipient]['completed']:
-            return False, f"{recipient} has already completed signing"
+            return False, f"{recipient} has already signed this document"
         
         # Check if active sign token exists
         from signing.models import SigningToken
@@ -70,7 +118,7 @@ class DocumentService:
         ).first()
         
         if active_token and not active_token.used:
-            return False, f"Active sign link already exists for {recipient}"
+            return False, "An active signing link already exists for this recipient"
         
         return True, None
     
@@ -78,7 +126,7 @@ class DocumentService:
     def can_generate_view_link(document):
         """Check if a view link can be generated for the document."""
         if document.status == 'draft':
-            return False, "Document must be locked before generating view links"
+            return False, "Document is still in draft mode"
         return True, None
     
     @staticmethod
@@ -117,16 +165,14 @@ class DocumentService:
             # No recipients defined, mark as completed
             document.status = 'completed'
         else:
-            # Check if all recipients completed all their required fields
-            all_completed = all(rs['completed'] for rs in recipient_status.values())
-            any_signed = any(rs['signed'] > 0 for rs in recipient_status.values())
+            all_completed = all(
+                status['completed'] for status in recipient_status.values()
+            )
             
             if all_completed:
                 document.status = 'completed'
-            elif any_signed:
-                document.status = 'partially_signed'
             else:
-                document.status = 'locked'
+                document.status = 'partially_signed'
         
         # ✅ Save with explicit update_fields to avoid race conditions
         document.save(update_fields=['status'])
@@ -134,11 +180,11 @@ class DocumentService:
         # Auto-generate signed PDF when completed
         if document.status == 'completed' and not document.signed_file:
             try:
-                from documents.services import get_pdf_flattening_service
-                service = get_pdf_flattening_service()
-                service.flatten_and_save(document)
+                from documents.services.pdf_flattening import get_pdf_flattening_service
+                flattening_service = get_pdf_flattening_service()
+                flattening_service.flatten_and_save(document)
             except Exception as e:
-                print(f"⚠️  Failed to auto-generate signed PDF: {e}")
+                print(f"⚠️ Failed to auto-generate signed PDF: {e}")
 
 
 _document_service = None

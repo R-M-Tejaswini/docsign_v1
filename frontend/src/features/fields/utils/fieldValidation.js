@@ -1,6 +1,6 @@
 //frontend/src/features/fields/utils/fieldValidation.js
 /**
- * ✅ UNIFIED: Field validation logic
+ * ✅ UPDATED: Field validation with prefilled_text rules
  */
 
 export const validateFieldValue = (value, fieldType, required = false) => {
@@ -22,6 +22,7 @@ export const validateFieldValue = (value, fieldType, required = false) => {
       break
 
     case 'text':
+    case 'prefilled_text':  // ✅ NEW: Same as text
       if (value && value.length > 500) {
         return 'Text cannot exceed 500 characters'
       }
@@ -45,8 +46,17 @@ export const validateField = (field) => {
     errors.field_type = 'Field type is required'
   }
 
-  if (!field.recipient || !field.recipient.trim()) {
+  // ✅ NEW: Recipient optional for static prefilled, required for others
+  const isPrefilled = field.field_type === 'prefilled_text'
+  const isStatic = isPrefilled && !field.is_editable_prefill
+
+  if (!isStatic && (!field.recipient || !field.recipient.trim())) {
     errors.recipient = 'Recipient is required'
+  }
+
+  // ✅ NEW: Validate prefill_value for static fields
+  if (isPrefilled && isStatic && (!field.prefill_value || !field.prefill_value.trim())) {
+    errors.prefill_value = 'Static prefilled fields must have a default value'
   }
 
   if (field.x_pct < 0 || field.x_pct > 1) {
