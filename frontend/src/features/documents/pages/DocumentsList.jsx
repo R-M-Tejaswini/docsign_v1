@@ -26,28 +26,32 @@ import { CreateDocumentModal } from '../components/CreateDocumentModal'
 export const DocumentsList = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  // ✅ UPDATED: documentVersions → documents
   const [documents, setDocuments] = useState([])
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newDocTitle, setNewDocTitle] = useState('')
   const [newDocFile, setNewDocFile] = useState(null)
   const [selectedTemplateId, setSelectedTemplateId] = useState(null)
   const [templates, setTemplates] = useState([])
-  // ✅ UPDATED: copyingVersionId → duplicatingDocId
   const [duplicatingDocId, setDuplicatingDocId] = useState(null)
-  // ✅ UPDATED: downloadingVersionId → downloadingDocId
   const [downloadingDocId, setDownloadingDocId] = useState(null)
   const [createMode, setCreateMode] = useState('template')
   
+  // ✅ NEW: Delete state
+  const [deletingDocId, setDeletingDocId] = useState(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(null)
+  
+  const { addToast } = useToast()
   const { execute: listDocuments, loading } = useApi(() => documentAPI.list())
   const { execute: createDocument } = useApi((data) => documentAPI.create(data))
-  // ✅ UPDATED: copyDocumentVersion → duplicateDocument (no version_id param)
   const { execute: duplicateDocument } = useApi((docId) =>
     documentAPI.duplicate(docId)
   )
-  // ✅ UPDATED: downloadVersion → downloadDocument (no version_id param)
   const { execute: downloadDocument } = useApi((docId) =>
     documentAPI.download(docId)
+  )
+  // ✅ NEW: Delete API call
+  const { execute: deleteDocument } = useApi((docId) =>
+    documentAPI.delete(docId)
   )
 
   useEffect(() => {
@@ -59,26 +63,21 @@ export const DocumentsList = () => {
     try {
       const response = await listDocuments()
       
-      // ✅ FIXED: Handle paginated response structure correctly
       let docsArray = []
       
-      // Check if response has a 'results' key (paginated response)
       if (response && response.results && Array.isArray(response.results)) {
         docsArray = response.results
       } 
-      // Otherwise check if response is directly an array
       else if (Array.isArray(response)) {
         docsArray = response
       }
-      // Handle if response is the data object itself
       else if (response && typeof response === 'object') {
         docsArray = response
       }
       
-      // Sort by date descending
       docsArray.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
       setDocuments(docsArray)
-      console.log('✅ Loaded documents:', docsArray.length) // DEBUG
+      console.log('✅ Loaded documents:', docsArray.length)
     } catch (err) {
       console.error('Failed to load documents:', err)
       addToast('Failed to load documents', 'error')
@@ -107,17 +106,17 @@ export const DocumentsList = () => {
 
   const handleCreateDocument = async () => {
     if (!newDocTitle.trim()) {
-      alert('Please enter a document title')
+      addToast('Please enter a document title', 'error')
       return
     }
 
     if (createMode === 'template' && !selectedTemplateId) {
-      alert('Please select a template')
+      addToast('Please select a template', 'error')
       return
     }
 
     if (createMode === 'upload' && !newDocFile) {
-      alert('Please select a PDF file')
+      addToast('Please select a PDF file', 'error')
       return
     }
 
@@ -140,31 +139,29 @@ export const DocumentsList = () => {
       setCreateMode('template')
       await loadDocuments()
       navigate(`/documents/${newDoc.id}`)
+      addToast('Document created successfully', 'success')
     } catch (err) {
-      alert('Failed to create document: ' + (err.response?.data?.detail || err.message))
+      addToast('Failed to create document: ' + (err.response?.data?.detail || err.message), 'error')
     }
   }
 
-  // ✅ UPDATED: handleCopyVersion → handleDuplicateDocument
   const handleDuplicateDocument = async (documentId, documentTitle) => {
     try {
       setDuplicatingDocId(documentId)
-      // ✅ UPDATED: Call duplicateDocument (no version_id)
       const newDoc = await duplicateDocument(documentId)
       await loadDocuments()
       navigate(`/documents/${newDoc.id}`)
+      addToast('Document duplicated successfully', 'success')
     } catch (err) {
-      alert('Failed to duplicate document: ' + (err.response?.data?.error || err.message))
+      addToast('Failed to duplicate document: ' + (err.response?.data?.error || err.message), 'error')
     } finally {
       setDuplicatingDocId(null)
     }
   }
 
-  // ✅ UPDATED: handleDownloadVersion → handleDownloadDocument
   const handleDownloadDocument = async (documentTitle, documentId) => {
     try {
       setDownloadingDocId(documentId)
-      // ✅ UPDATED: Call downloadDocument (no version_id)
       const blob = await downloadDocument(documentId)
       
       const url = window.URL.createObjectURL(blob)
@@ -175,10 +172,26 @@ export const DocumentsList = () => {
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
+      addToast('PDF downloaded successfully', 'success')
     } catch (err) {
-      alert('Failed to download PDF: ' + (err.response?.data?.error || err.message))
+      addToast('Failed to download PDF: ' + (err.response?.data?.error || err.message), 'error')
     } finally {
       setDownloadingDocId(null)
+    }
+  }
+
+  // ✅ NEW: Handle delete document
+  const handleDeleteDocument = async (documentId) => {
+    try {
+      setDeletingDocId(documentId)
+      await deleteDocument(documentId)
+      setShowDeleteConfirm(null)
+      await loadDocuments()
+      addToast('Document deleted successfully', 'success')
+    } catch (err) {
+      addToast('Failed to delete document: ' + (err.response?.data?.error || err.message), 'error')
+    } finally {
+      setDeletingDocId(null)
     }
   }
 
@@ -223,11 +236,9 @@ export const DocumentsList = () => {
     return badges[status] || badges.draft
   }
 
-  // ✅ UPDATED: version → doc parameter
   const getRecipientProgressText = (doc) => {
     if (!doc) return null
     
-    // ✅ FIXED: Handle null/undefined recipient_status
     const recipientStatus = doc.recipient_status
     if (!recipientStatus || Object.keys(recipientStatus).length === 0) {
       return null
@@ -268,7 +279,6 @@ export const DocumentsList = () => {
       <div className="flex justify-between items-center mb-8">
         <div>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Documents</h1>
-          {/* ✅ UPDATED: Text updated */}
           <p className="text-lg text-gray-600">Create, manage, and track document signatures</p>
         </div>
         <Button
@@ -430,6 +440,64 @@ export const DocumentsList = () => {
         </div>
       </Modal>
 
+      {/* ✅ NEW: Delete Confirmation Modal */}
+      <Modal
+        isOpen={showDeleteConfirm !== null}
+        onClose={() => setShowDeleteConfirm(null)}
+        title="Delete Document"
+      >
+        <div className="space-y-4">
+          <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4">
+            <p className="text-sm text-red-900">
+              <strong>⚠️ Warning:</strong> This action cannot be undone. The document and all associated data will be permanently deleted.
+            </p>
+          </div>
+          
+          {showDeleteConfirm && (
+            <div>
+              <p className="text-gray-900 font-medium mb-2">Document to delete:</p>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                <p className="text-sm font-semibold text-gray-900">
+                  {documents.find(d => d.id === showDeleteConfirm)?.title}
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Created: {formatDate(documents.find(d => d.id === showDeleteConfirm)?.created_at)}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setShowDeleteConfirm(null)}
+              variant="secondary"
+              className="flex-1"
+              disabled={deletingDocId === showDeleteConfirm}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => handleDeleteDocument(showDeleteConfirm)}
+              variant="danger"
+              className="flex-1"
+              disabled={deletingDocId === showDeleteConfirm}
+            >
+              {deletingDocId === showDeleteConfirm ? (
+                <>
+                  <span className="animate-spin">⟳</span>
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <span>🗑️</span>
+                  Delete Permanently
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Documents Grid */}
       {documents.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-2xl shadow-lg">
@@ -476,7 +544,6 @@ export const DocumentsList = () => {
                     <div className="flex items-start justify-between gap-3 mb-2">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-xl font-bold text-gray-900 line-clamp-2 group-hover:text-indigo-600 transition-colors">
-                          {/* ✅ UPDATED: doc.title instead of version.document_title */}
                           {doc.title}
                         </h3>
                       </div>
@@ -485,7 +552,6 @@ export const DocumentsList = () => {
                         {statusBadge.label}
                       </span>
                     </div>
-                    {/* ✅ UPDATED: doc.description */}
                     {doc.description && (
                       <p className="text-sm text-gray-600 line-clamp-2">
                         {doc.description}
@@ -512,7 +578,6 @@ export const DocumentsList = () => {
                             const completed = statuses.filter(s => s.completed).length
                             const total = statuses.length || 1
                             const percentage = (completed / total) * 100
-                            console.log(`Progress: ${completed}/${total} = ${percentage}%`)  // ✅ DEBUG
                             return (
                               <div
                                 className="bg-gradient-to-r from-green-400 via-green-500 to-green-600 h-full rounded-full transition-all duration-500 shadow-sm"
@@ -534,7 +599,7 @@ export const DocumentsList = () => {
                           {Array.from(new Set(allRecipients)).map((recipient, idx) => (
                             <span
                               key={`${doc.id}-recipient-${idx}-${recipient}`}
-                              className={`${getRecipientBadgeClasses(recipient, allRecipients)} text-xs shadow-sm`}
+                              className={`text-xs shadow-sm bg-blue-100 text-blue-800 px-2 py-1 rounded`}
                             >
                               {recipient}
                             </span>
@@ -568,14 +633,11 @@ export const DocumentsList = () => {
                     
                     {isLocked && (
                       <Button
-                        // ✅ UPDATED: handleDuplicateDocument with doc.id, doc.title
                         onClick={() => handleDuplicateDocument(doc.id, doc.title)}
                         variant="secondary"
                         className="w-full"
-                        // ✅ UPDATED: duplicatingDocId
                         disabled={duplicatingDocId === doc.id}
                       >
-                        {/* ✅ UPDATED: duplicatingDocId */}
                         {duplicatingDocId === doc.id ? (
                           <>
                             <span className="animate-spin">⟳</span>
@@ -592,14 +654,11 @@ export const DocumentsList = () => {
 
                     {isLocked && doc.status === 'completed' && (
                       <Button
-                        // ✅ UPDATED: handleDownloadDocument with doc.title, doc.id
                         onClick={() => handleDownloadDocument(doc.title, doc.id)}
                         variant="success"
                         className="w-full"
-                        // ✅ UPDATED: downloadingDocId
                         disabled={downloadingDocId === doc.id}
                       >
-                        {/* ✅ UPDATED: downloadingDocId */}
                         {downloadingDocId === doc.id ? (
                           <>
                             <span className="animate-spin">⟳</span>
@@ -613,6 +672,17 @@ export const DocumentsList = () => {
                         )}
                       </Button>
                     )}
+
+                    {/* ✅ NEW: Delete Button */}
+                    <Button
+                      onClick={() => setShowDeleteConfirm(doc.id)}
+                      variant="danger"
+                      className="w-full"
+                      disabled={deletingDocId === doc.id}
+                    >
+                      <span>🗑️</span>
+                      Delete Document
+                    </Button>
                   </div>
                 </div>
               </div>

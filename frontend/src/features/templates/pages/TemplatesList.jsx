@@ -1,18 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
-// ✅ FIXED: Import from shared
 import { Button } from '../../../shared/components/ui/Button'
 import { Modal } from '../../../shared/components/ui/Modal'
-import { Input } from '../../../shared/components/ui/Input'
 import { LoadingSpinner } from '../../../shared/components/ui/LoadingSpinner'
-import { EmptyState } from '../../../shared/components/EmptyState'
 import { useApi } from '../../../shared/hooks/useApi'
 import { useToast } from '../../../shared/hooks/useToast'
 import { templateAPI } from '../../../shared/utils/api'
-
-import { TemplateCard } from '../components/TemplateCard'
-import { CreateTemplateModal } from '../components/CreateTemplateModal'
 
 export const TemplatesList = () => {
   const navigate = useNavigate()
@@ -21,8 +15,18 @@ export const TemplatesList = () => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newTemplateTitle, setNewTemplateTitle] = useState('')
   const [newTemplateFile, setNewTemplateFile] = useState(null)
+  
+  // ✅ NEW: Delete state
+  const [deletingTemplateId, setDeletingTemplateId] = useState(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(null)
+  
+  const { addToast } = useToast()
   const { execute: listTemplates, loading } = useApi(() => templateAPI.list())
   const { execute: createTemplate } = useApi((data) => templateAPI.create(data))
+  // ✅ NEW: Delete API call
+  const { execute: deleteTemplate } = useApi((templateId) =>
+    templateAPI.delete(templateId)
+  )
 
   useEffect(() => {
     loadTemplates()
@@ -44,18 +48,19 @@ export const TemplatesList = () => {
       setTemplates(templatesArray)
     } catch (err) {
       console.error('Failed to load templates:', err)
+      addToast('Failed to load templates', 'error')
       setTemplates([])
     }
   }
 
   const handleCreateTemplate = async () => {
     if (!newTemplateTitle.trim()) {
-      alert('Please enter a template title')
+      addToast('Please enter a template title', 'error')
       return
     }
 
     if (!newTemplateFile) {
-      alert('Please select a PDF file')
+      addToast('Please select a PDF file', 'error')
       return
     }
 
@@ -69,8 +74,24 @@ export const TemplatesList = () => {
       setNewTemplateFile(null)
       await loadTemplates()
       navigate(`/templates/${newTemplate.id}`)
+      addToast('Template created successfully', 'success')
     } catch (err) {
-      alert('Failed to create template')
+      addToast('Failed to create template: ' + (err.response?.data?.detail || err.message), 'error')
+    }
+  }
+
+  // ✅ NEW: Handle delete template
+  const handleDeleteTemplate = async (templateId) => {
+    try {
+      setDeletingTemplateId(templateId)
+      await deleteTemplate(templateId)
+      setShowDeleteConfirm(null)
+      await loadTemplates()
+      addToast('Template deleted successfully', 'success')
+    } catch (err) {
+      addToast('Failed to delete template: ' + (err.response?.data?.error || err.message), 'error')
+    } finally {
+      setDeletingTemplateId(null)
     }
   }
 
@@ -137,14 +158,12 @@ export const TemplatesList = () => {
             <label className="block text-sm font-semibold text-gray-900 mb-2">
               Upload PDF File <span className="text-red-500">*</span>
             </label>
-            <div className="relative">
-              <input
-                type="file"
-                accept=".pdf"
-                onChange={(e) => setNewTemplateFile(e.target.files?.[0] || null)}
-                className="w-full px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition-colors file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
-              />
-            </div>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={(e) => setNewTemplateFile(e.target.files?.[0] || null)}
+              className="w-full px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition-colors file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
+            />
             {newTemplateFile && (
               <p className="text-sm text-green-600 mt-2 flex items-center gap-2">
                 <span>✓</span>
@@ -172,6 +191,64 @@ export const TemplatesList = () => {
         </div>
       </Modal>
 
+      {/* ✅ NEW: Delete Confirmation Modal */}
+      <Modal
+        isOpen={showDeleteConfirm !== null}
+        onClose={() => setShowDeleteConfirm(null)}
+        title="Delete Template"
+      >
+        <div className="space-y-4">
+          <div className="bg-red-50 border-2 border-red-200 rounded-lg p-4">
+            <p className="text-sm text-red-900">
+              <strong>⚠️ Warning:</strong> This action cannot be undone. The template and all associated data will be permanently deleted.
+            </p>
+          </div>
+          
+          {showDeleteConfirm && (
+            <div>
+              <p className="text-gray-900 font-medium mb-2">Template to delete:</p>
+              <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                <p className="text-sm font-semibold text-gray-900">
+                  {templates.find(t => t.id === showDeleteConfirm)?.title}
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Created: {formatDate(templates.find(t => t.id === showDeleteConfirm)?.created_at)}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <Button
+              onClick={() => setShowDeleteConfirm(null)}
+              variant="secondary"
+              className="flex-1"
+              disabled={deletingTemplateId === showDeleteConfirm}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => handleDeleteTemplate(showDeleteConfirm)}
+              variant="danger"
+              className="flex-1"
+              disabled={deletingTemplateId === showDeleteConfirm}
+            >
+              {deletingTemplateId === showDeleteConfirm ? (
+                <>
+                  <span className="animate-spin">⟳</span>
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <span>🗑️</span>
+                  Delete Permanently
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Templates Grid */}
       {templates.length === 0 ? (
         <div className="text-center py-20 bg-white rounded-2xl shadow-lg">
@@ -194,8 +271,7 @@ export const TemplatesList = () => {
           {templates.map((template) => (
             <div
               key={template.id}
-              onClick={() => navigate(`/templates/${template.id}`)}
-              className="bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden group border border-gray-100 hover:border-blue-300 hover:scale-105"
+              className="bg-white rounded-xl shadow-md hover:shadow-2xl transition-all duration-300 cursor-pointer overflow-hidden group border border-gray-100 hover:border-blue-300"
             >
               {/* Card Preview Area */}
               <div className="bg-gradient-to-br from-blue-50 to-indigo-100 h-44 flex items-center justify-center group-hover:from-blue-100 group-hover:to-indigo-200 transition-all duration-300 relative overflow-hidden">
@@ -238,17 +314,42 @@ export const TemplatesList = () => {
                   <span className="font-semibold">{formatDate(template.created_at)}</span>
                 </div>
 
-                {/* Action Button */}
-                <Button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    navigate(`/templates/${template.id}`)
-                  }}
-                  variant="outline"
-                  className="w-full group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-600 transition-all"
-                >
-                  Edit Template →
-                </Button>
+                {/* Action Buttons */}
+                <div className="space-y-2 pt-2">
+                  <Button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      navigate(`/templates/${template.id}`)
+                    }}
+                    variant="outline"
+                    className="w-full group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-600 transition-all"
+                  >
+                    Edit Template →
+                  </Button>
+
+                  {/* ✅ NEW: Delete Button */}
+                  <Button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setShowDeleteConfirm(template.id)
+                    }}
+                    variant="danger"
+                    className="w-full"
+                    disabled={deletingTemplateId === template.id}
+                  >
+                    {deletingTemplateId === template.id ? (
+                      <>
+                        <span className="animate-spin">⟳</span>
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <span>🗑️</span>
+                        Delete Template
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
             </div>
           ))}

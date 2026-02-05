@@ -318,3 +318,28 @@ class DocumentViewSet(viewsets.ModelViewSet):
             }
         )
         return Response(serializer.data)
+    
+    @action(detail=True, methods=['delete'])
+    def destroy(self, request, pk=None):
+        """Delete a document."""
+        document = self.get_object()
+        
+        if document.status not in ['draft', 'locked']:
+            return Response(
+                {'error': 'Can only delete draft or locked documents'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # ✅ Delete associated files
+        if document.file:
+            document.file.delete()
+        if document.signed_file:
+            document.signed_file.delete()
+        
+        document_id = document.id
+        document.delete()
+        
+        return Response(
+            {'success': f'Document {document_id} deleted'},
+            status=status.HTTP_204_NO_CONTENT
+        )

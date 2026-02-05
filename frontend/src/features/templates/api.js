@@ -15,6 +15,7 @@ export const templateAPI = {
   
   get: (id) => api.get(`/templates/${id}/`).then((res) => res.data),
   update: (id, data) => api.patch(`/templates/${id}/`, data).then((res) => res.data),
+  // ✅ NEW: Delete method
   delete: (id) => api.delete(`/templates/${id}/`),
   getRecipients: (id) => api.get(`/templates/${id}/recipients/`).then((res) => res.data),
   createField: (templateId, fieldData) => 
