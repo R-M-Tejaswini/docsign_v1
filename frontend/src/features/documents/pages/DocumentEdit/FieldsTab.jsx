@@ -1,3 +1,4 @@
+//frontend/src/features/documents/pages/DocumentEdit/FieldsTab.jsx
 /**
  * ✅ EXTRACTED: All field management logic
  * ✅ FIXED: Added proper scrollable layout & field editor sidebar

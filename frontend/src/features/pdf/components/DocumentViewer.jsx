@@ -1,3 +1,4 @@
+//frontend/src/features/pdf/components/DocumentViewer.jsx
 import { useState, useEffect } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 import 'react-pdf/dist/esm/Page/AnnotationLayer.css'

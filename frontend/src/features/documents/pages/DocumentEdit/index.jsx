@@ -1,3 +1,4 @@
+//frontend/src/features/documents/pages/DocumentEdit/index.jsx
 /**
  * ✅ SPLIT: Thin container for DocumentEdit
  * - Loads document data

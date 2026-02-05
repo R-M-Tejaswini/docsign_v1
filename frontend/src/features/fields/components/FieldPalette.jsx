@@ -1,3 +1,4 @@
+//frontend/src/features/fields/components/FieldPalette.jsx
 import { Button } from '../../../shared/components/ui/Button'
 
 // ✅ FIXED: Field utilities from same feature

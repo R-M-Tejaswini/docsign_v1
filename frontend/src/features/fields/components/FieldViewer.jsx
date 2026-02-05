@@ -1,3 +1,4 @@
+//frontend/src/features/fields/components/FieldViewer.jsx
 /**
  * ✅ NEW: Read-only field display (extracted from FieldEditor)
  */

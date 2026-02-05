@@ -1,3 +1,4 @@
+//frontend/src/features/fields/components/FieldEditor.jsx
 import { useState, useEffect} from 'react'
 
 // ✅ FIXED: Import getRecipientBadgeClasses from shared utils

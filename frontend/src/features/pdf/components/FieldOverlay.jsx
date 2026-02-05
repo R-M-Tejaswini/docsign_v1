@@ -1,4 +1,6 @@
+//frontend/src/features/pdf/components/FieldOverlay.jsx
 /**
+ * frontend/src/features/pdf/components/FieldOverlay.jsx
  * ✅ NEW: Interactive field overlay on PDF for editing
  */
 

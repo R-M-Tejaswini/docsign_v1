@@ -1,3 +1,4 @@
+//frontend/src/features/fields/types.js
 /**
  * ✅ CENTRALIZED: Field type definitions
  */

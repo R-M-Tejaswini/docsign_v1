@@ -1,3 +1,4 @@
+//frontend/src/features/fields/utils/fieldRules.js
 /**
  * Field display rules and utilities
  */
