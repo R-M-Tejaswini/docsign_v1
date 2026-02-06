@@ -46,49 +46,48 @@ class DocumentService:
     # ✅ NEW: Validate document can be locked
     @staticmethod
     def validate_document_for_locking(document):
-        """
-        ✅ FIXED: Check if document is ready to be locked.
-        
-        Rules:
-        - Must have at least one interactive field (text, signature, date, etc.)
-        - Static prefilled fields don't count as interactive
-        - Editable prefilled fields DO count as interactive
-        
-        Returns:
-            (is_valid: bool, error_message: str or None)
-        """
+        """✅ FIXED: Validate prefilled fields have values AT LOCK TIME"""
         all_fields = list(document.fields.all())
         
         if not all_fields:
             return False, "Document must have at least one field before locking"
         
-        # ✅ NEW: Distinguish static prefilled from interactive fields
+        # ✅ Find interactive fields (non-static-prefilled)
         interactive_fields = [
             f for f in all_fields
-            if not (
-                f.field_type == 'prefilled_text' and 
-                not f.is_editable_prefill  # Static prefilled = non-interactive
-            )
+            if not (f.field_type == 'prefilled_text' and not f.is_editable_prefill)
         ]
         
         if not interactive_fields:
             return False, (
-                "Document must have at least one interactive field "
-                "(text, signature, date, etc.). "
-                "Static prefilled text fields alone are not sufficient."
+                "Document must have at least one interactive field. "
+                "Static prefilled text alone is insufficient."
             )
         
-        # ✅ Check all interactive fields have recipients
-        fields_without_recipients = [
+        # ✅ CRITICAL: Validate static prefilled fields have values BEFORE locking
+        static_prefilled = [
+            f for f in all_fields
+            if f.field_type == 'prefilled_text' and not f.is_editable_prefill
+        ]
+        
+        empty_static = [
+            f for f in static_prefilled 
+            if not f.prefill_value or f.prefill_value.strip() == ''
+        ]
+        
+        if empty_static:
+            labels = ', '.join(f.label for f in empty_static)
+            return False, f"Static prefilled fields must have values before locking: {labels}"
+        
+        # ✅ Check interactive fields have recipients
+        interactive_without_recipients = [
             f for f in interactive_fields
             if not f.recipient or not f.recipient.strip()
         ]
         
-        if fields_without_recipients:
-            field_labels = ', '.join(f.label for f in fields_without_recipients)
-            return False, (
-                f"The following fields need a recipient assigned: {field_labels}"
-            )
+        if interactive_without_recipients:
+            field_labels = ', '.join(f.label for f in interactive_without_recipients)
+            return False, f"These fields need recipients: {field_labels}"
         
         return True, None
     

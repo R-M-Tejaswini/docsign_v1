@@ -13,6 +13,7 @@ import { useApi } from '../../../../shared/hooks/useApi'
 import { publicAPI } from '../../api'
 import { getFieldDisplayInfo } from '../../../fields/utils/fieldRules'
 
+
 export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
   const [signerName, setSignerName] = useState('')
   const [fieldValues, setFieldValues] = useState({})
@@ -52,17 +53,29 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
   }
 
   const handleFieldChange = (fieldId, value) => {
-    // ✅ NEW: Check if field is editable (skip if static prefilled)
+    // ✅ DEBUG: Log what we're checking
+    console.log('🔍 handleFieldChange:', {
+      fieldId,
+      value,
+      editableIds: pageData.editable_field_ids,
+      isIncluded: pageData.editable_field_ids?.includes(fieldId),
+    })
+    
     const field = pageData.fields?.find(f => f.id === fieldId)
     
     // Static prefilled fields are never editable
     if (field?.field_type === 'prefilled_text' && !field.is_editable_prefill) {
+      console.log('⚠️ Static prefilled - blocking edit')
       return
     }
     
-    // Only allow changes to fields assigned to this recipient
-    if (!pageData.editable_field_ids?.includes(fieldId)) return
+    // ✅ FIX: Check if field ID is in the editable list
+    if (!pageData.editable_field_ids || !pageData.editable_field_ids.includes(fieldId)) {
+      console.log('❌ Field not in editable_field_ids, blocking')
+      return
+    }
     
+    console.log('✅ Field is editable, allowing change')
     setFieldValues((prev) => ({ ...prev, [fieldId]: value }))
   }
 
@@ -90,16 +103,19 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
 
     setSubmitting(true)
     try {
-      // ✅ NEW: Include ALL field values (including static prefilled)
-      // Backend will only process editable fields
-      const filledFields = pageData.fields.map((f) => ({
-        field_id: f.id,
-        value: fieldValues[f.id] || '',
-      }))
+      // ✅ CRITICAL FIX: Send as ARRAY, not object
+      const filledFields = pageData.fields
+        .filter(f => pageData.editable_field_ids?.includes(f.id))  // Only editable fields
+        .map((f) => ({
+          field_id: f.id.toString(),  // ✅ Convert to string
+          value: fieldValues[f.id] || '',
+        }))
+
+      console.log('📝 Submitting field values:', filledFields)  // ✅ DEBUG
 
       const signData = {
         signer_name: signerName.trim(),
-        field_values: filledFields,
+        field_values: filledFields,  // ✅ This is an ARRAY
       }
 
       const result = await submitSignature(signData)
@@ -137,22 +153,27 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
     return pageData.editable_field_ids?.includes(f.id)
   })
 
-  // ✅ NEW: Live field preview overlay
+  // ✅ SIMPLIFIED: Live field preview overlay
   const LiveFieldPreview = ({ field, pageWidth = 612, pageHeight = 792, scale = 1 }) => {
     if (!field || !pageData.editable_field_ids?.includes(field.id)) {
       return null
     }
 
     const value = fieldValues[field.id] || ''
+    
+    // ✅ Only show preview if field has value AND not static prefilled
+    if (!value || (field.field_type === 'prefilled_text' && !field.is_editable_prefill)) {
+      return null
+    }
+
     const x = field.x_pct * pageWidth * scale
     const y = field.y_pct * pageHeight * scale
     const width = field.width_pct * pageWidth * scale
     const height = field.height_pct * pageHeight * scale
-    const info = getFieldDisplayInfo(field.field_type)
 
     return (
       <div
-        className={`absolute border-2 rounded ${info.borderColor} ${info.color} bg-opacity-30 p-2 overflow-hidden flex items-center justify-center`}
+        className="absolute border-2 border-blue-500 bg-white bg-opacity-70 p-1 overflow-hidden flex items-center justify-center"
         style={{
           left: x,
           top: y,
@@ -162,45 +183,40 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
           pointerEvents: 'none',
         }}
       >
-        <span className="text-xs text-gray-700 text-center line-clamp-2">
-          {value || `[${field.label}]`}
+        <span className="text-xs text-gray-700 text-center line-clamp-2 font-semibold">
+          {value}
         </span>
       </div>
     )
   }
 
-  // ✅ UPDATED: Render field inputs with prefilled_text support
+  // ✅ SIMPLIFIED: Render field inputs
   const renderFieldInput = (field, value, onChange) => {
-    const info = getFieldDisplayInfo(field.field_type)
-
-    // ✅ NEW: Handle prefilled_text fields
+    // ✅ Handle prefilled_text fields
     if (field.field_type === 'prefilled_text') {
       if (!field.is_editable_prefill) {
-        // Static: Read-only display
+        // Static: Read-only display - MINIMAL
         return (
-          <div
-            className="px-4 py-3 bg-gray-50 border-2 border-gray-300 rounded-lg text-gray-700 text-sm font-medium"
-            title="This text is static and cannot be edited"
-          >
+          <div className="px-3 py-2 bg-gray-50 border-2 border-gray-300 rounded text-gray-700 text-sm">
             {field.prefill_value || '(empty)'}
           </div>
         )
       } else {
-        // Editable: Text input with prefill
+        // Editable: Text input
         return (
           <textarea
             value={value}
             onChange={(e) => onChange(field.id, e.target.value)}
             placeholder={field.prefill_value || 'Enter text...'}
             rows={3}
-            className="w-full px-4 py-2.5 border-2 border-teal-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 disabled:bg-gray-100"
+            className="w-full px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
             disabled={!pageData.editable_field_ids?.includes(field.id)}
           />
         )
       }
     }
 
-    // Standard field types
+    // Standard field types - SIMPLIFIED
     switch (field.field_type) {
       case 'text':
         return (
@@ -209,7 +225,7 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
             onChange={(e) => onChange(field.id, e.target.value)}
             placeholder="Enter text..."
             rows={3}
-            className="w-full px-4 py-2.5 border-2 border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
             disabled={!pageData.editable_field_ids?.includes(field.id)}
           />
         )
@@ -220,7 +236,7 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
             type="date"
             value={value}
             onChange={(e) => onChange(field.id, e.target.value)}
-            className="w-full px-4 py-2.5 border-2 border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="w-full px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={!pageData.editable_field_ids?.includes(field.id)}
           />
         )
@@ -231,41 +247,14 @@ export const SigningForm = ({ token, pageData, onSuccess, addToast }) => {
             type="text"
             value={value}
             onChange={(e) => onChange(field.id, e.target.value)}
-            placeholder="Type your signature name..."
-            className="w-full px-4 py-2.5 border-2 border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
-            disabled={!pageData.editable_field_ids?.includes(field.id)}
-          />
-        )
-
-      case 'checkbox':
-        return (
-          <label className="flex items-center gap-3 cursor-pointer p-3 border-2 border-orange-300 rounded-lg hover:bg-orange-50">
-            <input
-              type="checkbox"
-              checked={value === 'true' || value === true}
-              onChange={(e) => onChange(field.id, e.target.checked ? 'true' : 'false')}
-              className="w-5 h-5"
-              disabled={!pageData.editable_field_ids?.includes(field.id)}
-            />
-            <span className="font-medium text-gray-900">{field.label}</span>
-          </label>
-        )
-
-      case 'initials':
-        return (
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => onChange(field.id, e.target.value.slice(0, 3))}
-            placeholder="Initials (max 3)"
-            maxLength="3"
-            className="w-full px-4 py-2.5 border-2 border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-500 text-center font-bold text-lg"
+            placeholder="Type your signature..."
+            className="w-full px-3 py-2 border-2 border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={!pageData.editable_field_ids?.includes(field.id)}
           />
         )
 
       default:
-        return <div className="text-red-600 text-sm">Unsupported field type: {field.field_type}</div>
+        return <div className="text-red-600 text-sm">Unsupported: {field.field_type}</div>
     }
   }
 

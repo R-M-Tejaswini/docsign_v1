@@ -111,56 +111,50 @@ export const FieldEditor = ({
         disabled={!canEdit || isSaving}
       />
 
-      {/* ✅ Prefilled Text Fields */}
+      {/* ✅ Prefilled Text Fields - LIGHTER styling */}
       {isPrefilled && (
-        <div className="space-y-4 p-4 bg-teal-50 border-2 border-teal-200 rounded-lg">
-          <h4 className="text-sm font-bold text-teal-900">Prefilled Text Settings</h4>
+        <div className="space-y-4 p-3 bg-gray-50 border-2 border-gray-200 rounded-lg">
+          <h4 className="text-sm font-bold text-gray-900">Prefilled Text</h4>
           
           {/* Prefill Value */}
           <div>
-            <label className="block text-sm font-bold text-gray-900 mb-2">
-              Default Text Value
+            <label className="block text-xs font-bold text-gray-700 mb-2">
+              Default Text
             </label>
             <textarea
               value={prefillValue}
               onChange={(e) => setPrefillValue(e.target.value)}
-              placeholder="Enter the text that will appear in this field..."
-              rows={3}
+              placeholder="Text to pre-fill..."
+              rows={2}
               disabled={!canEdit || isSaving}
               className={`
-                w-full px-4 py-2.5 border-2 border-teal-300 rounded-lg
-                focus:outline-none focus:ring-2 focus:ring-teal-500
-                disabled:bg-gray-100 disabled:cursor-not-allowed
+                w-full px-3 py-2 border-2 border-gray-300 rounded
+                focus:outline-none focus:ring-2 focus:ring-blue-500
+                text-sm disabled:bg-gray-100 disabled:cursor-not-allowed
               `}
             />
           </div>
 
-          {/* Editable Toggle */}
-          <div className="flex items-center gap-3">
+          {/* Editable Toggle - SIMPLE */}
+          <label className="flex items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
-              id="isEditablePrefill"
               checked={isEditablePrefill}
               onChange={(e) => setIsEditablePrefill(e.target.checked)}
               disabled={!canEdit || isSaving}
-              className="w-4 h-4 rounded"
+              className="w-4 h-4 rounded border-2 border-gray-300"
             />
-            <label htmlFor="isEditablePrefill" className="text-sm font-semibold text-gray-900">
-              Allow recipient to edit this text
-            </label>
-          </div>
+            <span className="text-sm font-semibold text-gray-900">
+              Recipient can edit
+            </span>
+          </label>
 
-          {/* Mode Description */}
-          <div className="text-xs text-teal-800 bg-white border border-teal-200 p-2 rounded">
+          {/* Mode Info - MINIMAL */}
+          <div className="text-xs text-gray-600 border-l-4 border-gray-300 pl-2">
             {isEditablePrefill ? (
-              <p>
-                <strong>Editable Mode:</strong> Text is pre-filled but the recipient can modify it during signing.
-              </p>
+              'Text can be modified during signing'
             ) : (
-              <p>
-                <strong>Static Mode:</strong> Text is permanently set and cannot be changed. It will be rendered 
-                directly on the PDF when the document is locked.
-              </p>
+              'Text is locked and will appear on final PDF'
             )}
           </div>
         </div>

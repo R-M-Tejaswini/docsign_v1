@@ -131,7 +131,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         
         doc_service = get_document_service()
         
-        # ✅ FIXED: Call the validation method
+        # ✅ CRITICAL: Call validation method
         is_valid, error_message = doc_service.validate_document_for_locking(document)
         
         if not is_valid:

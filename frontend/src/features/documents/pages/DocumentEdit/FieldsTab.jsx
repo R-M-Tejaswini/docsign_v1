@@ -43,7 +43,6 @@ export const FieldsTab = ({ document, onUpdate, addToast }) => {
     const x = (e.clientX - rect.left) / rect.width
     const y = (e.clientY - rect.top) / rect.height
 
-    // ✅ NEW: For static prefilled fields, don't require a recipient
     const isStaticPrefilled = 
       addingFieldType === 'prefilled_text' && 
       !document.fields?.some(f => f.field_type === 'prefilled_text' && f.is_editable_prefill)
@@ -60,15 +59,15 @@ export const FieldsTab = ({ document, onUpdate, addToast }) => {
         y_pct: Math.max(0, Math.min(1, y)),
         width_pct: 0.15,
         height_pct: 0.05,
-        required: addingFieldType === 'prefilled_text' ? false : true,  // ✅ Prefilled not required by default
-        // ✅ NEW: Prefilled text defaults
-        prefill_value: addingFieldType === 'prefilled_text' ? '' : undefined,
-        is_editable_prefill: false,  // Default to static
+        required: addingFieldType === 'prefilled_text' ? false : true,
+        // ✅ FIXED: Allow empty prefill_value on create - user will fill it in editor
+        prefill_value: '',  // ✅ Empty string, NOT undefined
+        is_editable_prefill: false,
       })
       setFields([...fields, newField])
       setSelectedFieldId(newField.id)
       setAddingFieldType(null)
-      addToast('Field added - drag to reposition and edit in sidebar', 'success')
+      addToast('Field added - fill in the prefill value in the sidebar', 'success')
     } catch (err) {
       addToast('Failed to add field', 'error')
       console.error(err)

@@ -29,7 +29,6 @@ export const FieldOverlay = ({
   const handleDragStop = (e, d) => {
     const newXPct = d.x / (pageWidth * scale)
     const newYPct = d.y / (pageHeight * scale)
-
     onUpdate({
       ...field,
       x_pct: Math.max(0, Math.min(newXPct, 1 - field.width_pct)),
@@ -40,7 +39,6 @@ export const FieldOverlay = ({
   const handleResizeStop = (e, direction, ref, delta, position) => {
     const newWidth = ref.offsetWidth / (pageWidth * scale)
     const newHeight = ref.offsetHeight / (pageHeight * scale)
-
     onUpdate({
       ...field,
       x_pct: Math.max(0, position.x / (pageWidth * scale)),
@@ -50,34 +48,28 @@ export const FieldOverlay = ({
     })
   }
 
-  // ✅ For static prefilled fields, show preview of the text
+  // ✅ FIXED: Show prefill preview only when NOT selected
   const showPrefillPreview =
     field.field_type === 'prefilled_text' &&
     !field.is_editable_prefill &&
-    field.prefill_value
+    field.prefill_value &&
+    !isSelected  // ✅ CRITICAL: Hide when editing
 
   return (
     <Rnd
-      default={{
-        x,
-        y,
-        width,
-        height,
-      }}
+      default={{ x, y, width, height }}
       position={{ x, y }}
       size={{ width, height }}
       onDragStop={handleDragStop}
       onResizeStop={handleResizeStop}
-      // ✅ FIXED: Use enableResizing (not disableResizing)
       enableResizing={isEditing}
-      // ✅ FIXED: Use onDragStart/onDragStop to control dragging
       dragEnabled={isEditing}
       resizeEnabled={isEditing}
       className={`
         border-2 flex flex-col items-center justify-center select-none
         ${isSelected
-          ? `${info.borderColor} ${info.color} bg-opacity-40 shadow-lg`
-          : `border-gray-400 bg-gray-100 bg-opacity-20 hover:border-gray-500`
+          ? 'border-blue-500 bg-white shadow-lg'  // ✅ WHITE background when selected
+          : 'border-gray-300 bg-white'  // ✅ WHITE + gray border when not selected
         }
       `}
       style={{
@@ -91,11 +83,10 @@ export const FieldOverlay = ({
         onSelect?.(field.id)
       }}
     >
-      {/* ✅ Prefill preview for static fields */}
+      {/* ✅ Prefill preview ONLY when not selected */}
       {showPrefillPreview ? (
-        <div className="text-center pointer-events-none overflow-hidden text-clip">
-          <div className="text-xs font-bold text-gray-700 mb-1">{field.label}</div>
-          <div className="text-xs text-gray-600 leading-tight line-clamp-2">
+        <div className="text-center pointer-events-none overflow-hidden text-clip w-full">
+          <div className="text-xs font-semibold text-gray-700 line-clamp-3 px-2">
             {field.prefill_value}
           </div>
         </div>
@@ -103,10 +94,9 @@ export const FieldOverlay = ({
         <div className="text-center pointer-events-none">
           <div className="text-2xl">{info.icon}</div>
           <div className="text-xs font-bold text-gray-700 mt-1">{field.label}</div>
-          <div className="text-xs text-gray-600">{field.field_type}</div>
-          {/* Show editable badge for editable prefilled fields */}
+          {/* ✅ REMOVED: field type label when overlayed on PDF */}
           {field.field_type === 'prefilled_text' && field.is_editable_prefill && (
-            <div className="text-xs text-teal-600 font-semibold mt-1">✏️ Editable</div>
+            <div className="text-xs text-teal-600 font-semibold mt-1">✏️</div>
           )}
         </div>
       )}

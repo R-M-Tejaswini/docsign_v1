@@ -64,11 +64,21 @@ export const DocumentEdit = () => {
     setIsLocking(true)
     try {
       await lockDocument()
-      addToast('Document locked', 'success')
+      addToast('Document locked and ready for signing!', 'success')
       await loadDocument()
     } catch (err) {
-      console.error('Failed to lock document:', err)
-      addToast('Failed to lock document', 'error')
+      const errorMsg = err.response?.data?.error || 'Failed to lock document'
+      console.error('Lock error:', err)
+      
+      // ✅ Check if it's a prefill_value error
+      if (errorMsg.includes('Static prefilled')) {
+        addToast(
+          `❌ ${errorMsg}\n\nPlease fill in all static prefilled text fields before locking.`,
+          'error'
+        )
+      } else {
+        addToast(errorMsg, 'error')
+      }
     } finally {
       setIsLocking(false)
     }

@@ -146,6 +146,8 @@ class PDFOverlayRenderer:
     def __init__(self):
         self.converter = PDFCoordinateConverter()
         self.font_manager = PDFFontManager()
+        # ✅ ADDED: Register fonts on init
+        self.font_manager.register_fonts()
     
     def render_field(self, canvas_obj, field) -> None:
         """✅ UPDATED: Render a single field onto the canvas."""
@@ -183,35 +185,116 @@ class PDFOverlayRenderer:
                     font_size, value_to_render
                 )
             elif field.field_type == 'signature':
-                self._render_signature(canvas_obj, field, x, pdf_y_top, width, height, font_size)
+                self._render_signature(canvas_obj, field, x, pdf_y_top, width, height, font_size, value_to_render)
             elif field.field_type == 'date':
-                self._render_date(canvas_obj, field, x, pdf_y_top, width, height, font_size)
+                self._render_date(canvas_obj, field, x, pdf_y_top, width, height, font_size, value_to_render)
             elif field.field_type == 'checkbox':
-                self._render_checkbox(canvas_obj, field, x, pdf_y_top, width, height, font_size)
+                self._render_checkbox(canvas_obj, field, x, pdf_y_top, width, height, font_size, value_to_render)
             elif field.field_type == 'text':
-                self._render_text(canvas_obj, field, x, pdf_y_top, width, height, font_size)
+                self._render_text(canvas_obj, field, x, pdf_y_top, width, height, font_size, value_to_render)
         except Exception as e:
             print(f"⚠️ Error rendering field {field.label}: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _render_prefilled_text(self, canvas_obj, field, x: float, y: float,
                               width: float, height: float, font_size: int,
                               text_value: str) -> None:
-        """✅ NEW: Render prefilled text field."""
-        canvas_obj.setFont('Helvetica', min(font_size, 10))
-        canvas_obj.setFillColor(HexColor('#1a1a1a'))  # Dark gray/black
-        
-        # Light background for visual distinction
+        """✅ FIXED: Simple text rendering"""
+        # Light background box
         canvas_obj.setFillColor(HexColor('#f5f5f5'))
-        canvas_obj.rect(x, y, width, height, fill=1, stroke=0)
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=1)
         
         # Draw text
+        canvas_obj.setFont('Helvetica', min(font_size, 10))
         canvas_obj.setFillColor(HexColor('#1a1a1a'))
-        text_y = y + (height * 0.15)
         
-        # Simple text rendering (can add wrapping if needed)
-        text_lines = text_value.split('\n')
-        for i, line in enumerate(text_lines[:3]):  # Max 3 lines
-            canvas_obj.drawString(x + 2, text_y - (i * font_size), line[:50])
+        # Position text in center of box
+        text_y = y + (height / 2) - (font_size / 2)
+        text_x = x + 2
+        
+        # Simple single-line text
+        canvas_obj.drawString(text_x, text_y, text_value[:100])
+    
+    def _render_signature(self, canvas_obj, field, x: float, y: float,
+                         width: float, height: float, font_size: int,
+                         signature_text: str) -> None:
+        """✅ FIXED: Render signature field"""
+        # Light background box
+        canvas_obj.setFillColor(HexColor('#f0f0f0'))
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=1)
+        
+        # Draw signature text in fancy font (or fallback to Helvetica)
+        font_name = self.font_manager.get_font_for_field('signature')
+        canvas_obj.setFont(font_name, min(font_size, 14))
+        canvas_obj.setFillColor(HexColor('#2c3e50'))
+        
+        # Position text in center
+        text_y = y + (height / 2) - (font_size / 2)
+        text_x = x + 4
+        
+        # Draw signature
+        canvas_obj.drawString(text_x, text_y, signature_text[:50])
+    
+    def _render_date(self, canvas_obj, field, x: float, y: float,
+                    width: float, height: float, font_size: int,
+                    date_text: str) -> None:
+        """✅ FIXED: Render date field"""
+        # Light background box
+        canvas_obj.setFillColor(HexColor('#e8f4f8'))
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=1)
+        
+        # Draw date
+        canvas_obj.setFont('Helvetica', min(font_size, 10))
+        canvas_obj.setFillColor(HexColor('#16a085'))
+        
+        # Position text
+        text_y = y + (height / 2) - (font_size / 2)
+        text_x = x + 2
+        
+        canvas_obj.drawString(text_x, text_y, date_text[:20])
+    
+    def _render_checkbox(self, canvas_obj, field, x: float, y: float,
+                        width: float, height: float, font_size: int,
+                        checkbox_text: str) -> None:
+        """✅ FIXED: Render checkbox field"""
+        # Draw checkbox box
+        canvas_obj.setFillColor(HexColor('#fdf2e9'))
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=1)
+        
+        # Draw checkmark or X
+        canvas_obj.setFont('Helvetica-Bold', min(font_size, 12))
+        canvas_obj.setFillColor(HexColor('#d68910'))
+        
+        # Center the checkmark
+        text_y = y + (height / 2) - (font_size / 2)
+        text_x = x + (width / 2) - 3
+        
+        # Draw X or checkmark based on value
+        if checkbox_text.lower() in ['true', '1', 'yes', 'checked', '✓', '☑']:
+            canvas_obj.drawString(text_x, text_y, '✓')
+        else:
+            canvas_obj.drawString(text_x, text_y, '☐')
+    
+    def _render_text(self, canvas_obj, field, x: float, y: float,
+                    width: float, height: float, font_size: int,
+                    text_value: str) -> None:
+        """✅ FIXED: Render generic text field"""
+        # Light background box
+        canvas_obj.setFillColor(HexColor('#ecf0f1'))
+        canvas_obj.rect(x, y, width, height, fill=1, stroke=1)
+        
+        # Draw text
+        canvas_obj.setFont('Helvetica', min(font_size, 10))
+        canvas_obj.setFillColor(HexColor('#34495e'))
+        
+        # Position text
+        text_y = y + (height / 2) - (font_size / 2)
+        text_x = x + 2
+        
+        # Truncate long text
+        canvas_obj.drawString(text_x, text_y, text_value[:100])
+    
 
 
 class PDFFlatteningService:
@@ -221,11 +304,7 @@ class PDFFlatteningService:
         self.renderer = PDFOverlayRenderer()
     
     def flatten_document(self, document) -> bytes:
-        """
-        Generate flattened PDF with all field overlays merged.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
+        """✅ FIXED: Include ALL fields with values (static + filled)"""
         if not document.file:
             raise FileNotFoundError("Document has no file")
         
@@ -240,21 +319,24 @@ class PDFFlatteningService:
         for page_num in range(len(reader.pages)):
             original_page = reader.pages[page_num]
             
+            # ✅ FIXED: Get ALL fields that have content:
+            # 1. Static prefilled (is_editable_prefill=False) - always have prefill_value
+            # 2. Filled editable fields (value is set)
             page_fields = document.fields.filter(
-                page_number=page_num + 1,
-                locked=True  # Only render locked (signed) fields
-            ).select_for_update(skip_locked=True)
+                page_number=page_num + 1
+            ).exclude(
+                field_type='prefilled_text',
+                is_editable_prefill=False,
+                prefill_value__in=['', None]  # Skip empty static prefilled
+            ).exclude(
+                value__in=['', None]  # Skip empty regular fields
+            )
             
             if page_fields.exists():
-                overlay_bytes = self._create_overlay_page(page_fields)
-                
-                try:
-                    overlay_reader = PdfReader(overlay_bytes)
-                    overlay_page = overlay_reader.pages[0]
-                    original_page.merge_page(overlay_page)
-                except Exception as e:
-                    print(f"⚠️  Error merging overlay for page {page_num + 1}: {e}")
-            
+                overlay_buffer = self._create_overlay_page(page_fields)
+                overlay_page = PdfReader(overlay_buffer).pages[0]
+                original_page.merge_page(overlay_page)
+        
             writer.add_page(original_page)
         
         output_buffer = BytesIO()
@@ -267,43 +349,65 @@ class PDFFlatteningService:
         """Create a single overlay page for the given fields."""
         overlay_buffer = BytesIO()
         
+        # ✅ FIXED: Create canvas with correct page size
         overlay_canvas = canvas.Canvas(
             overlay_buffer,
             pagesize=(self.renderer.PAGE_WIDTH, self.renderer.PAGE_HEIGHT)
         )
         
-        for field in fields:
-            self.renderer.render_field(overlay_canvas, field)
+        # ✅ Set transparent background
+        overlay_canvas.setFillAlpha(0)  # Transparent
         
+        for field in fields:
+            try:
+                self.renderer.render_field(overlay_canvas, field)
+            except Exception as e:
+                print(f"⚠️ Error rendering field {field.label}: {e}")
+        
+        # ✅ Save and reset pointer
         overlay_canvas.save()
         overlay_buffer.seek(0)
         
         return overlay_buffer
     
     def flatten_and_save(self, document):
-        """
-        Flatten signatures onto PDF and save, then compute hash.
-        
-        ✅ CONSOLIDATED: Now works with Document directly
-        """
+        """Flatten signatures onto PDF and save."""
         from django.core.files.base import ContentFile
         
         try:
+            print(f"\n🔴 === FLATTENING START ===")
+            print(f"📄 Document: {document.id} ({document.title})")
+            
+            # Check fields
+            all_fields = document.fields.all()
+            print(f"📋 Total fields: {all_fields.count()}")
+            for f in all_fields:
+                print(f"  - {f.label}: value='{f.value}', locked={f.locked}, type={f.field_type}")
+            
+            fields_with_values = document.fields.exclude(value='')
+            print(f"✅ Fields with values: {fields_with_values.count()}")
+            
             # Perform flattening
             flattened_pdf = self.flatten_document(document)
+            print(f"📦 Flattened PDF size: {len(flattened_pdf)} bytes")
             
             # Save the flattened PDF
             filename = f'signed_{datetime.now().timestamp()}.pdf'
             document.signed_file.save(filename, ContentFile(flattened_pdf))
+            print(f"💾 Saved to: {document.signed_file.name}")
             
-            # Compute and store SHA256 of signed PDF
+            # Compute hash
             from .document_service import DocumentService
             service = DocumentService()
             service.update_signed_pdf_hash(document)
             
+            print(f"🟢 === FLATTENING COMPLETE ===\n")
             return document
+            
         except Exception as e:
             print(f"❌ Error flattening PDF: {e}")
+            import traceback
+            traceback.print_exc()
             raise
 
 

@@ -49,28 +49,34 @@ class SigningProcessService:
         """Validate that all fields being signed belong to the recipient."""
         field_ids = [fv['field_id'] for fv in field_values]
         
+        # ✅ FIXED: Don't check locked status here - check later
+        # Fields can be locked=True if updating existing signature
         recipient_fields = document.fields.filter(
             id__in=field_ids,
-            recipient=recipient,
-            locked=False
+            recipient=recipient
         )
         
         if recipient_fields.count() != len(field_ids):
             raise ValidationError(
-                'Some fields do not belong to this recipient or are already signed'
+                'Some fields do not belong to this recipient'
             )
         
         return recipient_fields
     
     @staticmethod
     def validate_required_fields(document, recipient, field_values):
-        """Validate that all required fields for the recipient are being filled."""
+        """✅ FIXED: Exclude static prefilled from required validation"""
         field_ids = set(fv['field_id'] for fv in field_values)
         
+        # ✅ CRITICAL: Exclude static prefilled fields - they're auto-filled
         required_recipient_fields = document.fields.filter(
             recipient=recipient,
             required=True,
             locked=False
+        ).exclude(
+            # ✅ NEW: Static prefilled fields don't need submission
+            field_type='prefilled_text',
+            is_editable_prefill=False
         )
         
         missing_required = required_recipient_fields.exclude(id__in=field_ids)
@@ -180,6 +186,19 @@ class SigningProcessService:
         
         # ✅ Step 5: Refresh document again to get updated status
         document.refresh_from_db()
+        
+        # ✅ CRITICAL: If document is NOW completed, flatten it immediately
+        if document.status == 'completed' and not document.signed_file:
+            print(f"📄 Document completed, flattening PDF...")
+            try:
+                from documents.services.pdf_flattening import get_pdf_flattening_service
+                flattening_service = get_pdf_flattening_service()
+                flattening_service.flatten_and_save(document)
+                print(f"✅ PDF flattened and saved")
+            except Exception as e:
+                print(f"❌ Error flattening PDF: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Phase 3: Trigger webhooks
         SigningProcessService._trigger_webhooks(document, signature_event, signer_name, recipient)

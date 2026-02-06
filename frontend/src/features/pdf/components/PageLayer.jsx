@@ -1,3 +1,4 @@
+//frontend/src/features/pdf/components/PageLayer.jsx
 import { useEffect, useRef } from 'react'
 
 // ✅ FIXED: Import from same feature, no .js extension

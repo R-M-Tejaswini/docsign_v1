@@ -8,51 +8,51 @@ export const getFieldDisplayInfo = (fieldType) => {
     text: {
       icon: '📝',
       label: 'Text',
-      color: 'bg-blue-100',
-      borderColor: 'border-blue-300',
+      color: 'bg-white',           // ✅ WHITE
+      borderColor: 'border-blue-400',
       textColor: 'text-blue-800',
     },
     signature: {
       icon: '✍️',
       label: 'Signature',
-      color: 'bg-purple-100',
-      borderColor: 'border-purple-300',
+      color: 'bg-white',           // ✅ WHITE
+      borderColor: 'border-purple-400',
       textColor: 'text-purple-800',
     },
     date: {
       icon: '📅',
       label: 'Date',
-      color: 'bg-green-100',
-      borderColor: 'border-green-300',
+      color: 'bg-white',           // ✅ WHITE
+      borderColor: 'border-green-400',
       textColor: 'text-green-800',
     },
     checkbox: {
       icon: '☑️',
       label: 'Checkbox',
-      color: 'bg-orange-100',
-      borderColor: 'border-orange-300',
+      color: 'bg-white',           // ✅ WHITE
+      borderColor: 'border-orange-400',
       textColor: 'text-orange-800',
     },
     initials: {
       icon: '👤',
       label: 'Initials',
-      color: 'bg-pink-100',
-      borderColor: 'border-pink-300',
+      color: 'bg-white',           // ✅ WHITE
+      borderColor: 'border-pink-400',
       textColor: 'text-pink-800',
     },
     prefilled_text: {
       icon: '📄',
       label: 'Prefilled Text',
-      color: 'bg-teal-100',           // ✅ DISTINCT: Teal for prefilled
-      borderColor: 'border-teal-300',
-      textColor: 'text-teal-800',
+      color: 'bg-white',           // ✅ WHITE (not teal)
+      borderColor: 'border-gray-400',
+      textColor: 'text-gray-800',
     },
   }
   return info[fieldType] || { 
     icon: '?', 
     label: 'Unknown', 
-    color: 'bg-gray-100',
-    borderColor: 'border-gray-300',
+    color: 'bg-white',
+    borderColor: 'border-gray-400',
     textColor: 'text-gray-800',
   }
 }

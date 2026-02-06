@@ -9,7 +9,7 @@ from .models import Document, DocumentField
 
 
 class DocumentFieldSerializer(serializers.ModelSerializer):
-    """Serializer for DocumentField."""
+    """✅ FIXED: Unified validation"""
     
     class Meta:
         model = DocumentField
@@ -17,38 +17,28 @@ class DocumentFieldSerializer(serializers.ModelSerializer):
             'id', 'field_type', 'label', 'recipient', 'page_number',
             'x_pct', 'y_pct', 'width_pct', 'height_pct',
             'required', 'value', 'locked',
-            'prefill_value', 'is_editable_prefill',  # ✅ NEW
+            'prefill_value', 'is_editable_prefill',
         ]
         read_only_fields = ['id', 'locked']
     
     def validate(self, data):
-        """✅ NEW: Validate prefilled_text specific rules."""
-        field_type = data.get('field_type')
-        recipient = data.get('recipient')
-        is_editable = data.get('is_editable_prefill', False)
-        prefill_value = data.get('prefill_value')
+        """✅ FIXED: Only validate on update, not create"""
+        # ✅ CRITICAL: Skip validation for CREATE operations
+        # Let document locking validation handle prefill_value requirement
+        if self.instance is None:  # This is a CREATE
+            return data
         
-        # ✅ Prefilled text validation
+        # ✅ Only validate on UPDATE
+        field_type = data.get('field_type', self.instance.field_type if self.instance else None)
+        is_editable = data.get('is_editable_prefill', self.instance.is_editable_prefill if self.instance else False)
+        recipient = data.get('recipient', self.instance.recipient if self.instance else None)
+        
         if field_type == 'prefilled_text':
-            # Static prefilled: recipient optional, prefill_value required
-            if not is_editable and not prefill_value:
-                raise serializers.ValidationError(
-                    {'prefill_value': 'Static prefilled fields must have a prefill_value'}
-                )
-            
-            # Editable prefilled: recipient required
+            # Editable prefilled: recipient REQUIRED
             if is_editable and not recipient:
-                raise serializers.ValidationError(
-                    {'recipient': 'Editable prefilled fields must have a recipient'}
-                )
-            
-            # Non-prefilled field types should not have these fields set
-            # (but allow them to be null/blank for flexibility)
-        
-        # ✅ For non-prefilled types, prefill_value should be empty
-        if field_type != 'prefilled_text':
-            data['prefill_value'] = None
-            data['is_editable_prefill'] = False
+                raise serializers.ValidationError({
+                    'recipient': 'Editable prefilled fields need a recipient'
+                })
         
         return data
 

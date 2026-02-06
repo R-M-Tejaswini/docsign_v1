@@ -1,3 +1,4 @@
+//frontend/src/features/templates/pages/TemplateEdit.jsx
 /**
  * ✅ UPDATED: TemplateEdit with prefilled_text support
  */

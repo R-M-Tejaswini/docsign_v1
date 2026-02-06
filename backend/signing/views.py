@@ -4,10 +4,10 @@ backend/signing/views.py
 Signing tokens, signatures, public signing, and audit endpoints.
 """
 
+import logging
 from datetime import datetime
 from io import BytesIO
 import zipfile
-import logging
 
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -20,7 +20,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from documents.models import Document, DocumentField
-from documents.services import get_document_service, get_pdf_flattening_service
+from documents.serializers import DocumentDetailSerializer, DocumentFieldSerializer  # ✅ ADD THIS
 from .models import SigningToken, SignatureEvent
 from .serializers import (
     SigningTokenSerializer, SignatureEventSerializer,
@@ -30,6 +30,7 @@ from .services import (
     get_token_service, get_signature_service,
     get_signing_process_service
 )
+from documents.services import get_document_service
 
 logger = logging.getLogger(__name__)
 
@@ -167,35 +168,37 @@ class PublicSignViewSet(viewsets.ViewSet):
             
             logger.info(f"📄 Document: {document.id}, status: {document.status}")
             
-            # ✅ FIXED: Build response data carefully
+            # ✅ CRITICAL FIX: Build editable_field_ids CORRECTLY
             editable_field_ids = []
             is_editable = False
             
             if signing_token.scope == 'sign' and not signing_token.used:
-                is_editable = True
-                # ✅ Fields already prefetched
-                editable_field_ids = [
-                    f.id for f in document.fields.all()
-                    if f.recipient == signing_token.recipient and not f.locked
-                ]
-                logger.info(f"✏️ Editable fields for {signing_token.recipient}: {editable_field_ids}")
+                # Get ALL fields for this recipient (regardless of lock status)
+                recipient_fields = document.fields.filter(
+                    recipient=signing_token.recipient
+                ).values_list('id', flat=True)
+                
+                editable_field_ids = list(recipient_fields)
+                is_editable = len(editable_field_ids) > 0
+                
+                logger.info(f"✅ Editable field IDs: {editable_field_ids}")
+                logger.info(f"✅ Is editable: {is_editable}")
             
-            # ✅ FIXED: Import correct serializers
-            from documents.serializers import DocumentDetailSerializer, DocumentFieldSerializer
-            from signing.serializers import SignatureEventSerializer
-            
-            # ✅ Serialize fields
-            fields_data = DocumentFieldSerializer(document.fields.all(), many=True).data
-            logger.info(f"📋 Fields serialized: {len(fields_data)} fields")
-            
-            # ✅ Get signatures
-            if signing_token.scope == 'sign':
-                signatures = signing_token.signature_events.all()
-            else:
+            # ✅ CRITICAL: Get signatures only if document completed
+            if document.status == 'completed':
                 signatures = document.signatures.all()
+            else:
+                signatures = []
             
             signatures_data = SignatureEventSerializer(signatures, many=True).data
             logger.info(f"✍️ Signatures: {len(signatures_data)} signatures")
+            
+            # ✅ NEW: Serialize fields for response
+            fields_data = DocumentFieldSerializer(
+                document.fields.all(),
+                many=True
+            ).data
+            logger.info(f"📋 Fields serialized: {len(fields_data)} fields")
             
             # ✅ Compute status once
             recipient_status = None
@@ -220,7 +223,7 @@ class PublicSignViewSet(viewsets.ViewSet):
                 'is_editable': is_editable,
                 'editable_field_ids': editable_field_ids,
                 'document': document_data,
-                'fields': fields_data,
+                'fields': fields_data,  # ✅ NOW DEFINED
                 'signatures': signatures_data,
                 'expires_at': signing_token.expires_at.isoformat() if signing_token.expires_at else None,
                 'recipient_status': recipient_status
